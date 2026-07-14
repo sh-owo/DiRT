@@ -1,0 +1,15 @@
+backend: hf_stream
+hf_name: HuggingFaceFW/fineweb-edu
+hf_config: sample-10BT
+train_split: train
+eval_split: train
+text_key: text
+tokenizer_model: data/tokenizer.model
+eos_id: 2
+seq_len: 2048
+shuffle_buffer: 10000
+prefetch_batches: 8
+use_local_shards: false
+local_shard_dir: data/tokenized
+local_train_pattern: train-*.npy
+local_eval_pattern: eval-*.npy

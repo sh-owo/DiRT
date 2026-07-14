@@ -1,0 +1,14 @@
+defaults:
+  - model: dirt_700m
+  - train: tpu_v4_32
+  - data : fineweb_edu
+  - _self_
+
+seed: 1337
+mode: train
+checkpoint_path: null
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    

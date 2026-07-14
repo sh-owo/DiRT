@@ -1,0 +1,13 @@
+name: dirt
+vocab_size: 32767
+d_model: 1024
+n_blocks: 24
+n_heads: 16
+head_dim: 64
+d_ffn: 2816
+max_seq_len: 2048
+rope_base: 10000.0
+rms_norm_eps: 1.0e-6
+attn_dropout: 0.0
+dtype: bfloat16
+
