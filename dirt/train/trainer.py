@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+import wandb
 
 import flax.jax_utils as jax_utils
 import jax
@@ -61,16 +62,24 @@ def _make_train_step(model: DiRTModel):
         batch: dict[str, jnp.ndarray],
     ) -> tuple[DiRTTrainState, dict[str, jnp.ndarray]]:
         def loss_fn(params: Any) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
-            logits, _ = model.apply(
+            logits, all_metrics = model.apply(
                 {"params": params},
                 batch["input_ids"],
                 train=True,
             )
             nll = autoregressive_nll(logits, batch["input_ids"])
-            return nll, {"loss": nll, "nll": nll}
+            metrics = {"loss": nll, "nll": nll}
+            for i, layer_m in enumerate(all_metrics[:-1]):
+                for k, v in layer_m.items():
+                    metrics[f"layer_{i}/{k}"] = v.mean()
+            agg = all_metrics[-1]
+            for k, v in agg.items():
+                metrics[k] = v
+            return nll, metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         grads = jax.lax.pmean(grads, axis_name="data")
+        metrics["grad_norm"] = optax.global_norm(grads)
         metrics = jax.lax.pmean(metrics, axis_name="data")
         state = state.apply_gradients(grads=grads)
         return state, metrics
@@ -83,13 +92,20 @@ def _make_eval_step(model: DiRTModel):
         state: DiRTTrainState,
         batch: dict[str, jnp.ndarray],
     ) -> dict[str, jnp.ndarray]:
-        logits, _ = model.apply(
+        logits, all_metrics = model.apply(
             {"params": state.params},
             batch["input_ids"],
             train=False,
         )
         nll = autoregressive_nll(logits, batch["input_ids"])
-        return jax.lax.pmean({"nll": nll}, axis_name="data")
+        metrics = {"nll": nll}
+        for i, layer_m in enumerate(all_metrics[:-1]):
+            for k, v in layer_m.items():
+                metrics[f"layer_{i}/{k}"] = v.mean()
+        agg = all_metrics[-1]
+        for k, v in agg.items():
+            metrics[k] = v
+        return jax.lax.pmean(metrics, axis_name="data")
 
     return jax.pmap(eval_step, axis_name="data")
 
@@ -157,6 +173,9 @@ def run_training(cfg: DictConfig) -> None:
 
     start_step = int(jax.device_get(jax_utils.unreplicate(state_repl.step)))
 
+    if process_index == 0:
+        wandb.init(project="dirt", config=OmegaConf.to_container(cfg, resolve=True))
+
     train_iter = build_batch_iterator(
         data_cfg=data_cfg,
         split="train",
@@ -205,13 +224,23 @@ def run_training(cfg: DictConfig) -> None:
                     "nll": nll_val,
                     "ppl": ppl_val,
                     "elapsed_sec": elapsed,
+                    "grad_norm": float(metrics_host.get("grad_norm", 0.0)),
+                    "avg_delta_v": float(metrics_host.get("avg_delta_v", 0.0)),
+                    "avg_gate": float(metrics_host.get("avg_gate", 0.0)),
+                    "avg_review": float(metrics_host.get("avg_review", 0.0)),
                 }
+                per_layer = {}
+                for k, v in metrics_host.items():
+                    if k.startswith("layer_"):
+                        per_layer[k] = float(v)
                 with metrics_file.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(payload, ensure_ascii=True) + "\n")
                 print(
                     f"step={step} lr={lr_val:.6e} loss={payload['loss']:.4f} "
-                    f"nll={payload['nll']:.4f} ppl={payload['ppl']:.3f}"
+                    f"nll={payload['nll']:.4f} ppl={payload['ppl']:.3f} "
+                    f"grad_norm={payload['grad_norm']:.6f}"
                 )
+                wandb.log({**payload, **per_layer})
 
         if step > 0 and step % int(train_cfg["eval_every"]) == 0:
             eval_metrics = _run_eval_loop(
@@ -222,6 +251,9 @@ def run_training(cfg: DictConfig) -> None:
                 eval_step_fn=eval_step_fn,
             )
             if process_index == 0:
+                eval_log = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                eval_log["step"] = step
+                wandb.log(eval_log)
                 print(
                     f"eval step={step} nll={float(eval_metrics['nll']):.4f} ppl={float(eval_metrics['ppl']):.3f}"
                 )
@@ -244,6 +276,7 @@ def run_training(cfg: DictConfig) -> None:
             step=total_steps,
             keep=int(train_cfg["keep_checkpoints"]),
         )
+        wandb.finish()
 
 
 def run_evaluation(cfg: DictConfig) -> dict[str, Any]:
@@ -264,6 +297,9 @@ def run_evaluation(cfg: DictConfig) -> dict[str, Any]:
     process_index = jax.process_index()
     process_count = jax.process_count()
     local_device_count = jax.local_device_count()
+
+    if process_index == 0:
+        wandb.init(project="dirt", config=OmegaConf.to_container(cfg, resolve=True))
 
     global_batch_size = int(train_cfg["global_batch_size"])
     if global_batch_size % process_count != 0:
@@ -290,5 +326,8 @@ def run_evaluation(cfg: DictConfig) -> dict[str, Any]:
     )
 
     if process_index == 0:
+        eval_log = {f"eval/{k}": v for k, v in metrics.items()}
+        wandb.log(eval_log)
         print(json.dumps(metrics, ensure_ascii=True, indent=2))
+        wandb.finish()
     return metrics

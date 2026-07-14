@@ -35,8 +35,9 @@ class DiRTModel(nn.Module):
         logits = jnp.einsum("bld,vd->blv", x.astype(jnp.float32), embedding.astype(jnp.float32))
 
         aggregate = self._aggregate_metrics(all_metrics)
+        all_metrics.append(aggregate)
 
-        return logits, aggregate
+        return logits, all_metrics
     
     def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
         stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in ["delta_v", "gate", "review"]}
