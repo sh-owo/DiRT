@@ -25,4 +25,5 @@ dependencies = [
     "wandb>=0.28.0",
 ]
 
-
+[tool.setuptools.packages.find]
+include = ["dirt*"] 
