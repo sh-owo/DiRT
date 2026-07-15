@@ -4,6 +4,7 @@ from typing import Optional
 
 from dirt.models.common import causal_mask
 
+@jax.remat
 def scaled_dot_product_attention(
     q: jnp.ndarray,
     k: jnp.ndarray,
