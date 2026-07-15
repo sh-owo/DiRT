@@ -4,8 +4,8 @@ hf_config: sample-10BT
 train_split: train
 eval_split: train
 text_key: text
-tokenizer_model: data/tokenizer.model
-eos_id: 2
+tokenizer_model: data/tokenizer
+eos_id: 1
 seq_len: 2048
 shuffle_buffer: 10000
 prefetch_batches: 8

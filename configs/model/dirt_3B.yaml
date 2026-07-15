@@ -1,5 +1,5 @@
 name: dirt
-vocab_size: 32767
+vocab_size: 32128
 d_model: 1536
 n_blocks: 48
 n_heads: 24

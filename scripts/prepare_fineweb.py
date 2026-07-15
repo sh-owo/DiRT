@@ -33,7 +33,7 @@ def main() -> None:
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--text-key", type=str, default="text")
     parser.add_argument("--tokenizer-model", type=str, required=True)
-    parser.add_argument("--eos-id", type=int, default=2)
+    parser.add_argument("--eos-id", type=int, default=1)
     parser.add_argument("--seq-len", type=int, default=2048)
     parser.add_argument("--tokens-target", type=int, default=500000000)
     parser.add_argument("--shard-seqs", type=int, default=8192)
