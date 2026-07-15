@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 @dataclass
 class ModelConfig:
+    name: str
     vocab_size: int
     d_model: int
     n_blocks: int
