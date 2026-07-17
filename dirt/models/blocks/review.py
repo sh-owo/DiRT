@@ -62,18 +62,17 @@ class ReviewBlock(nn.Module):
         attn_out = jnp.transpose(attn_out, (0, 2, 1, 3)).reshape(batch, seq_len, self.cfg.d_model)
         attn_out = self.o_proj(attn_out)
 
-        _z_L = z_L + attn_out
-
-        ffn_norm = self.norm_ffn(_z_L)
+        _delta_v = delta_v + attn_out
+        ffn_norm = self.norm_ffn(_delta_v)
         _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
 
         gate = nn.sigmoid(self.prob_linear(_review))
         review = gate * _review
 
-        out = _z_L + review
+        out = z_L + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
-        gate_l2 = jnp.linalg.norm(gate, axis=-1)
+        gate_mean = jnp.mean(gate, axis=-1)
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
-        return out, delta_v_l2, gate_l2, review_l2
+        return out, delta_v_l2, gate_mean, review_l2
