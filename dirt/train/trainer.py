@@ -168,7 +168,11 @@ def run_training(cfg: DictConfig) -> None:
 
     base = cfg.checkpoint_path or ""
     ckpt_dir = os.path.join(base, train_cfg.checkpoint_dir, model_cfg.name)
-    if not ckpt_dir.startswith("gs://"):
+    if ckpt_dir.startswith("gs://"):
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        fs.makedirs(ckpt_dir, exist_ok=True)
+    else:
         ckpt_dir = os.path.abspath(ckpt_dir)
         os.makedirs(ckpt_dir, exist_ok=True)
     mngr = create_checkpoint_manager(
