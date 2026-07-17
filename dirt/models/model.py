@@ -5,6 +5,7 @@ from dirt.models.config import ModelConfig, dtype_from_name
 from dirt.models.layers import DirtLayer
 from dirt.models.common import RMSNorm, rope_tables
 
+
 class DiRTModel(nn.Module):
     cfg: ModelConfig
 
@@ -16,18 +17,21 @@ class DiRTModel(nn.Module):
             embedding_init=nn.initializers.normal(stddev=0.02),
             dtype=self.dtype,
         )
-        self.blocks = [DirtLayer(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}") for i in range(self.cfg.n_blocks)]
+        self.blocks = [
+            nn.remat(DirtLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
+            for i in range(self.cfg.n_blocks)
+        ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
-        self.sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
-    def __call__(self, input_ids: jnp.ndarray, train: bool) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+    def __call__(self, input_ids: jnp.ndarray, train: bool) -> tuple[jnp.ndarray, list[dict[str, jnp.ndarray]]]:
         batch, seq_len = input_ids.shape
         x = self.token_embedding(input_ids).astype(self.dtype)
         positions = jnp.arange(seq_len, dtype=jnp.int32)
-        all_metrics = []
+        sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
+        all_metrics = []
         for block in self.blocks:
-            x, metrics = block(x, positions, self.sincos)
+            x, metrics = block(x, positions, sincos)
             all_metrics.append(metrics)
 
         x = self.final_norm(x)
@@ -38,7 +42,7 @@ class DiRTModel(nn.Module):
         all_metrics.append(aggregate)
 
         return logits, all_metrics
-    
+
     def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
         stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in ["delta_v", "gate", "review"]}
         return {
