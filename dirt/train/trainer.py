@@ -212,10 +212,11 @@ def run_training(cfg: DictConfig) -> None:
 
         (loss, metrics_agg), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         grads = _constrain_tree(grads, param_shardings)
+        grad_norm = optax.global_norm(grads)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
-        return params, opt_state, loss, metrics_agg
+        return params, opt_state, loss, metrics_agg, grad_norm
 
     @partial(jax.jit, donate_argnums=(0,))
     def eval_step(params, x, y):
@@ -283,7 +284,7 @@ def run_training(cfg: DictConfig) -> None:
 
         key, step_key = jax.random.split(key)
         x, y = next(train_iter)
-        params, opt_state, loss, agg_metrics = train_step(params, opt_state, x, y, step_key)
+        params, opt_state, loss, agg_metrics, grad_norm = train_step(params, opt_state, x, y, step_key)
         loss_val = loss.item()
 
         if step % train_cfg.save_every == 0:
@@ -297,6 +298,7 @@ def run_training(cfg: DictConfig) -> None:
                 wandb.log({
                     "loss/train": loss_val,
                     "lr": lr_val,
+                    "grad_norm": grad_norm.item(),
                     **{f"metrics/{k}": v.item() for k, v in agg_metrics.items()},
                 }, step=step)
 
@@ -305,4 +307,6 @@ def run_training(cfg: DictConfig) -> None:
     pbar.close()
     mngr.wait_until_finished()
     if is_main:
+        from dirt.train.export import save_safetensors
+        save_safetensors(ckpt_dir, params, model_cfg, step)
         wandb.finish()
