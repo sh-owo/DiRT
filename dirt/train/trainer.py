@@ -191,7 +191,7 @@ def run_training(cfg: DictConfig) -> None:
         data_sharding,
         None,
     )
-    out_shardings = (param_shardings, opt_state_shardings, None)
+    out_shardings = (param_shardings, opt_state_shardings, None, None)
 
     @partial(
         jax.jit,
@@ -201,12 +201,17 @@ def run_training(cfg: DictConfig) -> None:
     )
     def train_step(params, opt_state, x, y, key):
         def loss_fn(p):
-            logits, _metrics = model.apply({"params": p}, x, train=True)
+            logits, all_metrics = model.apply({"params": p}, x, train=True)
             logits = logits.astype(jnp.float32)
             loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
-            return loss
+            per_block = {
+                f"block_{i}/{k}": jnp.mean(m[k])
+                for i, m in enumerate(all_metrics[:-1])
+                for k in ["delta_v", "gate", "review"]
+            }
+            return loss, {**per_block, **all_metrics[-1]}
 
-        loss, grads = jax.value_and_grad(loss_fn)(params)
+        (loss, metrics_agg), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         grads = jtu.tree_map(
             lambda g, s: jax.lax.with_sharding_constraint(g, s)
             if isinstance(g, Array) and s is not None
@@ -217,7 +222,7 @@ def run_training(cfg: DictConfig) -> None:
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
-        return params, opt_state, loss
+        return params, opt_state, loss, metrics_agg
 
     @partial(
         jax.jit,
@@ -225,10 +230,15 @@ def run_training(cfg: DictConfig) -> None:
         out_shardings=(None,),
     )
     def eval_step(params, x, y):
-        logits, _metrics = model.apply({"params": params}, x, train=False)
+        logits, all_metrics = model.apply({"params": params}, x, train=False)
         logits = logits.astype(jnp.float32)
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
-        return loss
+        per_block = {
+            f"block_{i}/{k}": jnp.mean(m[k])
+            for i, m in enumerate(all_metrics[:-1])
+            for k in ["delta_v", "gate", "review"]
+        }
+        return loss, {**per_block, **all_metrics[-1]}
 
     train_iter = create_data_iter(
         "train", data_cfg, model_cfg.max_seq_len,
@@ -265,19 +275,22 @@ def run_training(cfg: DictConfig) -> None:
     for step in pbar:
         if step > 0 and step % train_cfg.eval_every == 0:
             eval_losses = []
+            eval_metrics = []
             num_eval = train_cfg.get("eval_batches", 64)
             for _ in range(num_eval):
                 x_eval, y_eval = next(eval_iter)
-                loss_val = eval_step(params, x_eval, y_eval)
+                loss_val, eval_agg = eval_step(params, x_eval, y_eval)
                 eval_losses.append(loss_val.item())
+                eval_metrics.append({k: v.item() for k, v in eval_agg.items()})
             avg_val = float(np.mean(eval_losses))
+            avg_metrics = {k: float(np.mean([m[k] for m in eval_metrics])) for k in eval_metrics[0]}
             postfix["val_loss"] = avg_val
             if is_main:
-                wandb.log({"loss/val": avg_val}, step=step)
+                wandb.log({"loss/val": avg_val, **{f"metrics/val_{k}": v for k, v in avg_metrics.items()}}, step=step)
 
         key, step_key = jax.random.split(key)
         x, y = next(train_iter)
-        params, opt_state, loss = train_step(params, opt_state, x, y, step_key)
+        params, opt_state, loss, agg_metrics = train_step(params, opt_state, x, y, step_key)
         loss_val = loss.item()
 
         if step % train_cfg.save_every == 0:
@@ -288,7 +301,11 @@ def run_training(cfg: DictConfig) -> None:
             postfix["loss"] = loss_val
             postfix["lr"] = f"{lr_val:.2e}"
             if is_main:
-                wandb.log({"loss/train": loss_val, "lr": lr_val}, step=step)
+                wandb.log({
+                    "loss/train": loss_val,
+                    "lr": lr_val,
+                    **{f"metrics/{k}": v.item() for k, v in agg_metrics.items()},
+                }, step=step)
 
         pbar.set_postfix(**postfix)
 
