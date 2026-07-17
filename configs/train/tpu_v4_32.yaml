@@ -16,3 +16,7 @@ eval_batches: 64
 save_every: 1000
 checkpoint_dir: checkpoints/dirt
 keep_checkpoints: 5
+
+fsdp: true
+fsdp_size: 8
+fsdp_threshold: 262144
