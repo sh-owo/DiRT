@@ -110,7 +110,7 @@ def cast_pytree(pytree, dtype: jnp.dtype):
         if isinstance(x, Array):
             return x.astype(dtype)
         return x
-    return jtu.tree_map(_cast)
+    return jtu.tree_map(_cast, pytree)
 
 
 def count_params(params) -> int:
