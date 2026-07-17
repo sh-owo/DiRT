@@ -184,22 +184,21 @@ def run_training(cfg: DictConfig) -> None:
         mesh, jax.sharding.PartitionSpec(("replica", "data"), None)
     )
 
-    in_shardings = (
-        param_shardings,
-        opt_state_shardings,
-        data_sharding,
-        data_sharding,
-        None,
-    )
-    out_shardings = (param_shardings, opt_state_shardings, None, None)
+    def _constrain_tree(tree, shardings):
+        return jtu.tree_map(
+            lambda t, s: jax.lax.with_sharding_constraint(t, s)
+            if isinstance(t, Array) and s is not None
+            else t,
+            tree, shardings,
+        )
 
-    @partial(
-        jax.jit,
-        in_shardings=in_shardings,
-        out_shardings=out_shardings,
-        donate_argnums=(0, 1),
-    )
+    @partial(jax.jit, donate_argnums=(0, 1))
     def train_step(params, opt_state, x, y, key):
+        params = _constrain_tree(params, param_shardings)
+        opt_state = _constrain_tree(opt_state, opt_state_shardings)
+        x = jax.lax.with_sharding_constraint(x, data_sharding)
+        y = jax.lax.with_sharding_constraint(y, data_sharding)
+
         def loss_fn(p):
             logits, all_metrics = model.apply({"params": p}, x, train=True)
             logits = logits.astype(jnp.float32)
@@ -212,25 +211,18 @@ def run_training(cfg: DictConfig) -> None:
             return loss, {**per_block, **all_metrics[-1]}
 
         (loss, metrics_agg), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-        grads = jtu.tree_map(
-            lambda g, s: jax.lax.with_sharding_constraint(g, s)
-            if isinstance(g, Array) and s is not None
-            else g,
-            grads,
-            param_shardings,
-        )
+        grads = _constrain_tree(grads, param_shardings)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
         return params, opt_state, loss, metrics_agg
 
-    @partial(
-        jax.jit,
-        in_shardings=(param_shardings, data_sharding, data_sharding),
-        out_shardings=(None,),
-        donate_argnums=(0,),
-    )
+    @partial(jax.jit, donate_argnums=(0,))
     def eval_step(params, x, y):
+        params = _constrain_tree(params, param_shardings)
+        x = jax.lax.with_sharding_constraint(x, data_sharding)
+        y = jax.lax.with_sharding_constraint(y, data_sharding)
+
         logits, all_metrics = model.apply({"params": params}, x, train=False)
         logits = logits.astype(jnp.float32)
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
