@@ -197,7 +197,7 @@ def run_training(cfg: DictConfig) -> None:
         jax.jit,
         in_shardings=in_shardings,
         out_shardings=out_shardings,
-        donate="all",
+        donate_argnums=(0, 1),
     )
     def train_step(params, opt_state, x, y, key):
         def loss_fn(p):
@@ -228,6 +228,7 @@ def run_training(cfg: DictConfig) -> None:
         jax.jit,
         in_shardings=(param_shardings, data_sharding, data_sharding),
         out_shardings=(None,),
+        donate_argnums=(0,),
     )
     def eval_step(params, x, y):
         logits, all_metrics = model.apply({"params": params}, x, train=False)
