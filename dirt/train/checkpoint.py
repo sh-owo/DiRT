@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple, Callable
 
 import jax
@@ -66,3 +67,31 @@ def replicate_opt_state_scalars(opt_state, mesh):
         opt_state,
         is_leaf=_is_leaf,
     )
+
+
+def init_checkpoint(checkpoint_path, checkpoint_dir, model_name, keep, save_interval, params, opt_state):
+    base = checkpoint_path or ""
+    remote = os.path.join(base, checkpoint_dir, model_name)
+
+    if remote.startswith("gs://"):
+        local_base = os.path.abspath(f"/tmp/dirt_ckpt/{checkpoint_dir}")
+        ckpt_dir = os.path.join(local_base, model_name)
+        gcs_target = remote
+    else:
+        ckpt_dir = os.path.abspath(remote)
+        gcs_target = None
+
+    os.makedirs(ckpt_dir, exist_ok=True)
+    mngr = create_checkpoint_manager(ckpt_dir, keep, save_interval)
+    return mngr, params, opt_state, 0, ckpt_dir, gcs_target
+
+
+def sync_checkpoint(mngr, step, params, opt_state, gcs_target):
+    save_checkpoint(mngr, step, params, opt_state)
+    if gcs_target:
+        import gcsfs
+        import shutil
+
+        fs = gcsfs.GCSFileSystem()
+        fs.put(mngr.directory, gcs_target, recursive=True)
+        shutil.rmtree(mngr.directory)

@@ -17,10 +17,9 @@ from tqdm import trange
 from dirt.models.config import ModelConfig
 from dirt.models.model import DiRTModel
 from dirt.train.checkpoint import (
-    create_checkpoint_manager,
+    init_checkpoint,
     replicate_opt_state_scalars,
-    restore_checkpoint,
-    save_checkpoint,
+    sync_checkpoint,
 )
 from dirt.train.data import create_data_iter
 from dirt.train.sharding import (
@@ -166,24 +165,10 @@ def run_training(cfg: DictConfig) -> None:
     opt_state = replicate_opt_state_scalars(opt_state, mesh)
     opt_state_shardings = jtu.tree_map(_sharding_of, opt_state, is_leaf=_is_leaf)
 
-    base = cfg.checkpoint_path or ""
-    ckpt_dir = os.path.join(base, train_cfg.checkpoint_dir, model_cfg.name)
-    if ckpt_dir.startswith("gs://"):
-        import gcsfs
-        fs = gcsfs.GCSFileSystem()
-        fs.makedirs(ckpt_dir, exist_ok=True)
-    else:
-        ckpt_dir = os.path.abspath(ckpt_dir)
-        os.makedirs(ckpt_dir, exist_ok=True)
-    mngr = create_checkpoint_manager(
-        ckpt_dir,
-        max_to_keep=train_cfg.keep_checkpoints,
-        save_interval_steps=train_cfg.save_every,
+    mngr, params, opt_state, first_step, ckpt_dir, gcs_target = init_checkpoint(
+        cfg.checkpoint_path, train_cfg.checkpoint_dir, model_cfg.name,
+        train_cfg.keep_checkpoints, train_cfg.save_every, params, opt_state,
     )
-
-    params, opt_state, first_step = restore_checkpoint(mngr, params, opt_state)
-    if is_main and first_step > 0:
-        print(f"Resumed from step {first_step - 1}")
 
     data_sharding = jax.sharding.NamedSharding(
         mesh, jax.sharding.PartitionSpec(("replica", "data"), None)
@@ -293,7 +278,7 @@ def run_training(cfg: DictConfig) -> None:
         loss_val = loss.item()
 
         if step % train_cfg.save_every == 0:
-            save_checkpoint(mngr, step, params, opt_state)
+            sync_checkpoint(mngr, step, params, opt_state, gcs_target)
 
         if step % train_cfg.log_every == 0:
             lr_val = lr_schedule(step)
