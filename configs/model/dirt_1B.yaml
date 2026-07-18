@@ -1,8 +1,8 @@
 name: dirt_1b
 vocab_size: 32128
-d_model: 1024
-n_blocks: 32
-n_heads: 16
+d_model: 1536
+n_blocks: 24
+n_heads: 24
 head_dim: 64
 d_ffn: 2816
 max_seq_len: 2048
