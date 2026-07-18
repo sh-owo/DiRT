@@ -1,4 +1,4 @@
-name: dirt
+name: dirt_700m
 vocab_size: 32128
 d_model: 1024
 n_blocks: 24

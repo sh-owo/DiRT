@@ -1,333 +1,317 @@
-import json
-import os
-import time
-from pathlib import Path
-from typing import Any
-import wandb
+from __future__ import annotations
 
-import flax.jax_utils as jax_utils
+import math
+import os
+from functools import partial
+from typing import Tuple
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from omegaconf import DictConfig, OmegaConf
+import wandb
+from jax.experimental.multihost_utils import sync_global_devices
+from omegaconf import DictConfig
+from tqdm import trange
 
-from dirt.models import ModelConfig, DiRTModel
-from dirt.train.checkpointing import restore_train_state, save_train_state
-from dirt.train.data import build_batch_iterator, shard_batch_for_devices
-from dirt.train.losses import autoregressive_nll, perplexity_from_nll
-from dirt.train.schedules import compute_total_steps, create_learning_rate_schedule
-from dirt.train.state import DiRTTrainState
+from dirt.models.config import ModelConfig
+from dirt.models.model import DiRTModel
+from dirt.train.checkpoint import (
+    create_checkpoint_manager,
+    replicate_opt_state_scalars,
+    restore_checkpoint,
+    save_checkpoint,
+)
+from dirt.train.data import create_data_iter
+from dirt.train.sharding import (
+    create_mesh,
+    shard_params,
+)
+
+jax.config.update("jax_threefry_partitionable", True)
+
+Array = jax.Array
+jtu = jax.tree_util
 
 
-def _to_dict(cfg_node: Any) -> dict[str, Any]:
-    if isinstance(cfg_node, DictConfig):
-        return OmegaConf.to_container(cfg_node, resolve=True)
-    return dict(cfg_node)
+def _is_leaf(x):
+    return isinstance(x, Array)
 
 
-def _make_optimizer(train_cfg: dict[str, Any], total_steps: int) -> tuple[optax.GradientTransformation, optax.Schedule]:
-    lr_schedule = create_learning_rate_schedule(train_cfg, total_steps)
-    tx = optax.chain(
-        optax.clip_by_global_norm(float(train_cfg["grad_clip"])),
-        optax.adamw(
-            learning_rate=lr_schedule,
-            b1=float(train_cfg["adam_beta1"]),
-            b2=float(train_cfg["adam_beta2"]),
-            eps=float(train_cfg["adam_eps"]),
-            weight_decay=float(train_cfg["weight_decay"]),
-        ),
+def build_model_config(cfg: DictConfig) -> ModelConfig:
+    m = cfg.model
+    return ModelConfig(
+        name=m.name,
+        vocab_size=m.vocab_size,
+        d_model=m.d_model,
+        n_blocks=m.n_blocks,
+        n_heads=m.n_heads,
+        head_dim=m.head_dim,
+        d_ffn=m.d_ffn,
+        max_seq_len=m.max_seq_len,
+        rope_base=m.rope_base,
+        rms_norm_eps=m.rms_norm_eps,
+        attn_dropout=m.get("attn_dropout", 0.0),
+        dtype=m.dtype,
     )
-    return tx, lr_schedule
 
 
-def _init_or_restore_state(
-    model: DiRTModel,
-    tx: optax.GradientTransformation,
-    model_cfg: ModelConfig,
-    ckpt_dir: str,
-    seed: int,
-) -> DiRTTrainState:
-    rng = jax.random.PRNGKey(seed)
-    dummy_ids = jnp.zeros((1, model_cfg.max_seq_len), dtype=jnp.int32)
-    variables = model.init({"params": rng}, dummy_ids, train=False)
-    state = DiRTTrainState.create(apply_fn=model.apply, params=variables["params"], tx=tx)
-    restored = restore_train_state(state, ckpt_dir)
-    return restored
+def compute_total_steps(train_cfg: DictConfig, model_cfg: ModelConfig) -> int:
+    tokens_per_step = (
+        train_cfg.global_batch_size
+        * model_cfg.max_seq_len
+        * train_cfg.get("grad_accum_steps", 1)
+    )
+    total_tokens = train_cfg.target_train_tokens
+    total = math.ceil(total_tokens / tokens_per_step)
+    if train_cfg.max_steps is not None and train_cfg.max_steps > 0:
+        total = min(total, train_cfg.max_steps)
+    return total
 
 
-def _make_train_step(model: DiRTModel):
-    def train_step(
-        state: DiRTTrainState,
-        batch: dict[str, jnp.ndarray],
-    ) -> tuple[DiRTTrainState, dict[str, jnp.ndarray]]:
-        def loss_fn(params: Any) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
-            logits, all_metrics = model.apply(
-                {"params": params},
-                batch["input_ids"],
-                train=True,
-            )
-            nll = autoregressive_nll(logits, batch["input_ids"])
-            metrics = {"loss": nll, "nll": nll}
-            for i, layer_m in enumerate(all_metrics[:-1]):
-                for k, v in layer_m.items():
-                    metrics[f"layer_{i}/{k}"] = v.mean()
-            agg = all_metrics[-1]
-            for k, v in agg.items():
-                metrics[k] = v
-            return nll, metrics
-
-        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-        grads = jax.lax.pmean(grads, axis_name="data")
-        metrics["grad_norm"] = optax.global_norm(grads)
-        metrics = jax.lax.pmean(metrics, axis_name="data")
-        state = state.apply_gradients(grads=grads)
-        return state, metrics
-
-    return jax.pmap(train_step, axis_name="data", donate_argnums=(0,))
+def create_mesh_from_config(train_cfg: DictConfig):
+    devices = jax.devices()
+    n = len(devices)
+    fsdp_size = train_cfg.get("fsdp_size", 8)
+    if fsdp_size > n:
+        fsdp_size = n
+    while n % fsdp_size != 0:
+        fsdp_size //= 2
+    replica_size = n // fsdp_size
+    return create_mesh((replica_size, fsdp_size), ("replica", "data"))
 
 
-def _make_eval_step(model: DiRTModel):
-    def eval_step(
-        state: DiRTTrainState,
-        batch: dict[str, jnp.ndarray],
-    ) -> dict[str, jnp.ndarray]:
-        logits, all_metrics = model.apply(
-            {"params": state.params},
-            batch["input_ids"],
-            train=False,
-        )
-        nll = autoregressive_nll(logits, batch["input_ids"])
-        metrics = {"nll": nll}
-        for i, layer_m in enumerate(all_metrics[:-1]):
-            for k, v in layer_m.items():
-                metrics[f"layer_{i}/{k}"] = v.mean()
-        agg = all_metrics[-1]
-        for k, v in agg.items():
-            metrics[k] = v
-        return jax.lax.pmean(metrics, axis_name="data")
-
-    return jax.pmap(eval_step, axis_name="data")
-
-
-def _as_python_metric(value: Any) -> Any:
-    arr = np.asarray(value)
-    if arr.ndim == 0:
-        return float(arr)
-    return arr.tolist()
+def build_optimizer(
+    train_cfg: DictConfig, total_steps: int
+) -> Tuple[optax.GradientTransformation, optax.Schedule]:
+    scheduler = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=train_cfg.lr_peak,
+        warmup_steps=train_cfg.warmup_steps,
+        decay_steps=total_steps,
+        end_value=train_cfg.lr_end,
+    )
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(train_cfg.grad_clip),
+        optax.scale_by_adam(
+            b1=train_cfg.adam_beta1,
+            b2=train_cfg.adam_beta2,
+            eps=train_cfg.adam_eps,
+        ),
+        optax.add_decayed_weights(train_cfg.weight_decay),
+        optax.scale_by_schedule(scheduler),
+        optax.scale(-1),
+    )
+    return optimizer, scheduler
 
 
-def _run_eval_loop(
-    state_repl: DiRTTrainState,
-    eval_iter: Any,
-    eval_batches: int,
-    local_device_count: int,
-    eval_step_fn: Any,
-) -> dict[str, Any]:
-    metric_sums: dict[str, np.ndarray] = {}
-    for _ in range(eval_batches):
-        host_batch = next(eval_iter)["input_ids"]
-        sharded = shard_batch_for_devices(host_batch, local_device_count)
-        batch = {"input_ids": jnp.asarray(sharded)}
-        metrics = eval_step_fn(state_repl, batch)
-        metrics_host = jax.tree_util.tree_map(lambda x: np.asarray(jax_utils.unreplicate(x)), metrics)
-        for k, v in metrics_host.items():
-            if k not in metric_sums:
-                metric_sums[k] = np.array(v, copy=True)
-            else:
-                metric_sums[k] += np.array(v)
+def cast_pytree(pytree, dtype: jnp.dtype):
+    def _cast(x):
+        if isinstance(x, Array):
+            return x.astype(dtype)
+        return x
+    return jtu.tree_map(_cast, pytree)
 
-    reduced = {k: v / float(eval_batches) for k, v in metric_sums.items()}
-    reduced["ppl"] = perplexity_from_nll(float(reduced["nll"]))
-    return {k: _as_python_metric(v) for k, v in reduced.items()}
+
+def count_params(params) -> int:
+    return sum(x.size for x in jtu.tree_leaves(params) if isinstance(x, Array))
 
 
 def run_training(cfg: DictConfig) -> None:
-    model_cfg_dict = _to_dict(cfg.model)
-    train_cfg = _to_dict(cfg.train)
-    data_cfg = _to_dict(cfg.data)
+    proc_idx = jax.process_index()
+    is_main = proc_idx == 0
 
-    model_cfg = ModelConfig(**model_cfg_dict)
-    model = DiRTModel(model_cfg)
+    if is_main:
+        print(f"processes={jax.process_count()}, devices={jax.device_count()}")
+        print(f"cfg={cfg}")
 
-    total_steps = compute_total_steps(train_cfg, data_cfg)
-    tx, lr_schedule = _make_optimizer(train_cfg, total_steps)
+    model_cfg = build_model_config(cfg)
+    train_cfg = cfg.train
+    data_cfg = cfg.data
+    shard_fsdp = train_cfg.get("fsdp", True)
+    fsdp_threshold = train_cfg.get("fsdp_threshold", 2**18)
 
-    ckpt_dir = str(train_cfg["checkpoint_dir"])
-    Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
+    total_steps = compute_total_steps(train_cfg, model_cfg)
+    if is_main:
+        print(f"total_steps={total_steps}")
 
-    process_index = jax.process_index()
-    process_count = jax.process_count()
-    local_device_count = jax.local_device_count()
+    mesh = create_mesh_from_config(train_cfg)
+    if is_main:
+        print(f"mesh={mesh}")
+    sync_global_devices("mesh_created")
 
-    global_batch_size = int(train_cfg["global_batch_size"])
-    if global_batch_size % process_count != 0:
-        raise ValueError("global_batch_size must be divisible by process_count")
-    local_batch_size = global_batch_size // process_count
-    if local_batch_size % local_device_count != 0:
-        raise ValueError("local batch size must be divisible by local_device_count")
+    model = DiRTModel(cfg=model_cfg)
 
-    seed = int(cfg.seed)
-    state = _init_or_restore_state(model, tx, model_cfg, ckpt_dir, seed)
-    state_repl = jax_utils.replicate(state)
+    key = jax.random.PRNGKey(cfg.seed)
+    key, init_key = jax.random.split(key)
 
-    start_step = int(jax.device_get(jax_utils.unreplicate(state_repl.step)))
+    dummy = jnp.ones((1, model_cfg.max_seq_len), dtype=jnp.int32)
+    variables = model.init(init_key, dummy, train=True)
+    params = variables["params"]
 
-    if process_index == 0:
-        wandb.init(project="dirt", config=OmegaConf.to_container(cfg, resolve=True))
+    params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
 
-    train_iter = build_batch_iterator(
-        data_cfg=data_cfg,
-        split="train",
-        batch_size=local_batch_size,
-        process_index=process_index,
-        process_count=process_count,
-        seed=seed + process_index,
+    params = shard_params(params, mesh, shard_fsdp=shard_fsdp, threshold=fsdp_threshold)
+    if is_main:
+        print(f"params={count_params(params):,}")
+
+    def _sharding_of(x):
+        return x.sharding if isinstance(x, Array) else None
+
+    param_shardings = jtu.tree_map(_sharding_of, params, is_leaf=_is_leaf)
+
+    optimizer, lr_schedule = build_optimizer(train_cfg, total_steps)
+    opt_state = optimizer.init(params)
+
+    opt_state = replicate_opt_state_scalars(opt_state, mesh)
+    opt_state_shardings = jtu.tree_map(_sharding_of, opt_state, is_leaf=_is_leaf)
+
+    base = cfg.checkpoint_path or ""
+    ckpt_dir = os.path.join(base, train_cfg.checkpoint_dir, model_cfg.name)
+    if ckpt_dir.startswith("gs://"):
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        fs.makedirs(ckpt_dir, exist_ok=True)
+    else:
+        ckpt_dir = os.path.abspath(ckpt_dir)
+        os.makedirs(ckpt_dir, exist_ok=True)
+    mngr = create_checkpoint_manager(
+        ckpt_dir,
+        max_to_keep=train_cfg.keep_checkpoints,
+        save_interval_steps=train_cfg.save_every,
     )
 
-    eval_iter = build_batch_iterator(
-        data_cfg=data_cfg,
-        split="eval",
-        batch_size=local_batch_size,
-        process_index=process_index,
-        process_count=process_count,
-        seed=seed + 1000 + process_index,
+    params, opt_state, first_step = restore_checkpoint(mngr, params, opt_state)
+    if is_main and first_step > 0:
+        print(f"Resumed from step {first_step - 1}")
+
+    data_sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec(("replica", "data"), None)
     )
 
-    train_step_fn = _make_train_step(model)
-    eval_step_fn = _make_eval_step(model)
-
-    metrics_file = Path("train_metrics.jsonl")
-    if process_index == 0 and not metrics_file.exists():
-        metrics_file.write_text("", encoding="utf-8")
-
-    t0 = time.time()
-    for step in range(start_step, total_steps):
-        host_batch = next(train_iter)["input_ids"]
-        sharded = shard_batch_for_devices(host_batch, local_device_count)
-        batch = {"input_ids": jnp.asarray(sharded)}
-
-        state_repl, metrics = train_step_fn(state_repl, batch)
-
-        if step % int(train_cfg["log_every"]) == 0:
-            metrics_host = jax.tree_util.tree_map(lambda x: np.asarray(jax_utils.unreplicate(x)), metrics)
-            nll_val = float(metrics_host["nll"])
-            ppl_val = perplexity_from_nll(nll_val)
-            lr_val = float(lr_schedule(step))
-            elapsed = time.time() - t0
-
-            if process_index == 0:
-                payload = {
-                    "step": step,
-                    "lr": lr_val,
-                    "loss": float(metrics_host["loss"]),
-                    "nll": nll_val,
-                    "ppl": ppl_val,
-                    "elapsed_sec": elapsed,
-                    "grad_norm": float(metrics_host.get("grad_norm", 0.0)),
-                    "avg_delta_v": float(metrics_host.get("avg_delta_v", 0.0)),
-                    "avg_gate": float(metrics_host.get("avg_gate", 0.0)),
-                    "avg_review": float(metrics_host.get("avg_review", 0.0)),
-                }
-                per_layer = {}
-                for k, v in metrics_host.items():
-                    if k.startswith("layer_"):
-                        per_layer[k] = float(v)
-                with metrics_file.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-                print(
-                    f"step={step} lr={lr_val:.6e} loss={payload['loss']:.4f} "
-                    f"nll={payload['nll']:.4f} ppl={payload['ppl']:.3f} "
-                    f"grad_norm={payload['grad_norm']:.6f}"
-                )
-                wandb.log({**payload, **per_layer})
-
-        if step > 0 and step % int(train_cfg["eval_every"]) == 0:
-            eval_metrics = _run_eval_loop(
-                state_repl=state_repl,
-                eval_iter=eval_iter,
-                eval_batches=int(train_cfg["eval_batches"]),
-                local_device_count=local_device_count,
-                eval_step_fn=eval_step_fn,
-            )
-            if process_index == 0:
-                eval_log = {f"eval/{k}": v for k, v in eval_metrics.items()}
-                eval_log["step"] = step
-                wandb.log(eval_log)
-                print(
-                    f"eval step={step} nll={float(eval_metrics['nll']):.4f} ppl={float(eval_metrics['ppl']):.3f}"
-                )
-
-        if step > 0 and step % int(train_cfg["save_every"]) == 0:
-            if process_index == 0:
-                unrep = jax_utils.unreplicate(state_repl)
-                save_train_state(
-                    state=unrep,
-                    checkpoint_dir=ckpt_dir,
-                    step=step,
-                    keep=int(train_cfg["keep_checkpoints"]),
-                )
-
-    if process_index == 0:
-        unrep = jax_utils.unreplicate(state_repl)
-        save_train_state(
-            state=unrep,
-            checkpoint_dir=ckpt_dir,
-            step=total_steps,
-            keep=int(train_cfg["keep_checkpoints"]),
+    def _constrain_tree(tree, shardings):
+        return jtu.tree_map(
+            lambda t, s: jax.lax.with_sharding_constraint(t, s)
+            if isinstance(t, Array) and s is not None
+            else t,
+            tree, shardings,
         )
-        wandb.finish()
 
+    @partial(jax.jit, donate_argnums=(0, 1))
+    def train_step(params, opt_state, x, y, key):
+        params = _constrain_tree(params, param_shardings)
+        opt_state = _constrain_tree(opt_state, opt_state_shardings)
+        x = jax.lax.with_sharding_constraint(x, data_sharding)
+        y = jax.lax.with_sharding_constraint(y, data_sharding)
 
-def run_evaluation(cfg: DictConfig) -> dict[str, Any]:
-    model_cfg_dict = _to_dict(cfg.model)
-    train_cfg = _to_dict(cfg.train)
-    data_cfg = _to_dict(cfg.data)
+        def loss_fn(p):
+            logits, all_metrics = model.apply({"params": p}, x, train=True)
+            logits = logits.astype(jnp.float32)
+            loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
+            per_block = {
+                f"block_{i}/{k}": jnp.mean(m[k])
+                for i, m in enumerate(all_metrics[:-1])
+                for k in ["delta_v", "gate", "review"]
+            }
+            return loss, {**per_block, **all_metrics[-1]}
 
-    model_cfg = ModelConfig(**model_cfg_dict)
-    model = DiRTModel(model_cfg)
+        (loss, metrics_agg), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        grads = _constrain_tree(grads, param_shardings)
+        grad_norm = optax.global_norm(grads)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
+        return params, opt_state, loss, metrics_agg, grad_norm
 
-    total_steps = compute_total_steps(train_cfg, data_cfg)
-    tx, _ = _make_optimizer(train_cfg, total_steps)
+    @partial(jax.jit, donate_argnums=(0,))
+    def eval_step(params, x, y):
+        params = _constrain_tree(params, param_shardings)
+        x = jax.lax.with_sharding_constraint(x, data_sharding)
+        y = jax.lax.with_sharding_constraint(y, data_sharding)
 
-    ckpt_dir = str(cfg.checkpoint_path or train_cfg["checkpoint_dir"])
-    state = _init_or_restore_state(model, tx, model_cfg, ckpt_dir, int(cfg.seed))
-    state_repl = jax_utils.replicate(state)
+        logits, all_metrics = model.apply({"params": params}, x, train=False)
+        logits = logits.astype(jnp.float32)
+        loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
+        per_block = {
+            f"block_{i}/{k}": jnp.mean(m[k])
+            for i, m in enumerate(all_metrics[:-1])
+            for k in ["delta_v", "gate", "review"]
+        }
+        return loss, {**per_block, **all_metrics[-1]}
 
-    process_index = jax.process_index()
-    process_count = jax.process_count()
-    local_device_count = jax.local_device_count()
-
-    if process_index == 0:
-        wandb.init(project="dirt", config=OmegaConf.to_container(cfg, resolve=True))
-
-    global_batch_size = int(train_cfg["global_batch_size"])
-    if global_batch_size % process_count != 0:
-        raise ValueError("global_batch_size must be divisible by process_count")
-    local_batch_size = global_batch_size // process_count
-
-    eval_iter = build_batch_iterator(
-        data_cfg=data_cfg,
-        split="eval",
-        batch_size=local_batch_size,
-        process_index=process_index,
-        process_count=process_count,
-        seed=int(cfg.seed) + 2000 + process_index,
+    train_iter = create_data_iter(
+        "train", data_cfg, model_cfg.max_seq_len,
+        train_cfg.global_batch_size, mesh,
+    )
+    eval_iter = create_data_iter(
+        "val", data_cfg, model_cfg.max_seq_len,
+        train_cfg.global_batch_size, mesh,
     )
 
-    eval_step_fn = _make_eval_step(model)
+    if is_main:
+        wandb.init(
+            project="dirt",
+            config={
+                "model": dict(model_cfg.__dict__),
+                "train": dict(train_cfg),
+                "data": dict(data_cfg),
+                "total_steps": total_steps,
+                "n_params": count_params(params),
+                "shard_fsdp": shard_fsdp,
+                "fsdp_threshold": fsdp_threshold,
+            },
+        )
 
-    metrics = _run_eval_loop(
-        state_repl=state_repl,
-        eval_iter=eval_iter,
-        eval_batches=int(train_cfg["eval_batches"]),
-        local_device_count=local_device_count,
-        eval_step_fn=eval_step_fn,
+    postfix = {}
+    pbar = trange(
+        first_step,
+        total_steps,
+        initial=first_step,
+        total=total_steps,
+        disable=not is_main,
     )
 
-    if process_index == 0:
-        eval_log = {f"eval/{k}": v for k, v in metrics.items()}
-        wandb.log(eval_log)
-        print(json.dumps(metrics, ensure_ascii=True, indent=2))
+    for step in pbar:
+        if step > 0 and step % train_cfg.eval_every == 0:
+            eval_losses = []
+            eval_metrics = []
+            num_eval = train_cfg.get("eval_batches", 64)
+            for _ in range(num_eval):
+                x_eval, y_eval = next(eval_iter)
+                loss_val, eval_agg = eval_step(params, x_eval, y_eval)
+                eval_losses.append(loss_val.item())
+                eval_metrics.append({k: v.item() for k, v in eval_agg.items()})
+            avg_val = float(np.mean(eval_losses))
+            avg_metrics = {k: float(np.mean([m[k] for m in eval_metrics])) for k in eval_metrics[0]}
+            postfix["val_loss"] = avg_val
+            if is_main:
+                wandb.log({"loss/val": avg_val, **{f"metrics/val_{k}": v for k, v in avg_metrics.items()}}, step=step)
+
+        key, step_key = jax.random.split(key)
+        x, y = next(train_iter)
+        params, opt_state, loss, agg_metrics, grad_norm = train_step(params, opt_state, x, y, step_key)
+        loss_val = loss.item()
+
+        if step % train_cfg.save_every == 0:
+            save_checkpoint(mngr, step, params, opt_state)
+
+        if step % train_cfg.log_every == 0:
+            lr_val = lr_schedule(step)
+            postfix["loss"] = loss_val
+            postfix["lr"] = f"{lr_val:.2e}"
+            if is_main:
+                wandb.log({
+                    "loss/train": loss_val,
+                    "lr": lr_val,
+                    "grad_norm": grad_norm.item(),
+                    **{f"metrics/{k}": v.item() for k, v in agg_metrics.items()},
+                }, step=step)
+
+        pbar.set_postfix(**postfix)
+
+    pbar.close()
+    mngr.wait_until_finished()
+    if is_main:
+        from dirt.train.export import save_safetensors
+        save_safetensors(ckpt_dir, params, model_cfg, step)
         wandb.finish()
-    return metrics
