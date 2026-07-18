@@ -4,7 +4,7 @@ d_model: 1536
 n_blocks: 24
 n_heads: 24
 head_dim: 64
-d_ffn: 2816
+d_ffn: 4096
 max_seq_len: 2048
 rope_base: 10000.0
 rms_norm_eps: 1.0e-6
