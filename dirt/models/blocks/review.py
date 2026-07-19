@@ -32,7 +32,6 @@ class ReviewBlock(nn.Module):
         self.up_proj = nn.Dense(self.cfg.d_ffn, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "up_proj")
         self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj") 
 
-        self.gate = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= default_init(self.cfg.n_blocks), dtype=self.dtype, name= "correction_linear")
 
     def __call__(
         self,
