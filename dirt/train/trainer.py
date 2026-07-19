@@ -296,7 +296,9 @@ def run_training(cfg: DictConfig) -> None:
 
     pbar.close()
     mngr.wait_until_finished()
+
+    from dirt.train.export import save_safetensors
+    save_safetensors(ckpt_dir, params, model_cfg, step)
+
     if is_main:
-        from dirt.train.export import save_safetensors
-        save_safetensors(ckpt_dir, params, model_cfg, step)
         wandb.finish()
