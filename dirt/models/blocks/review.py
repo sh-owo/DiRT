@@ -32,8 +32,7 @@ class ReviewBlock(nn.Module):
         self.up_proj = nn.Dense(self.cfg.d_ffn, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "up_proj")
         self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj") 
 
-        self.prob_linear = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "prob_linear")
-
+        self.gate = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= default_init(self.cfg.n_blocks), dtype=self.dtype, name= "correction_linear")
 
     def __call__(
         self,
@@ -45,7 +44,7 @@ class ReviewBlock(nn.Module):
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
 
-        delta_v =  new - z_L
+        delta_v =  new - z_L # propose가 뭘 제안했는지
 
         z_L_norm = self.norm_attn(z_L)
         delta_v_norm = self.norm_attn(delta_v)
@@ -63,20 +62,14 @@ class ReviewBlock(nn.Module):
         attn_out = self.o_proj(attn_out)
 
         _delta_v = delta_v + attn_out
+
         ffn_norm = self.norm_ffn(_delta_v)
-        _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
+        correction = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj) # 어떻게,어느정도 바꾸는게 좋을지 
 
-        gate = nn.sigmoid(self.prob_linear(_review))
-        review = gate * _review
-
-        out = z_L + review
+        out = new + correction # propose가 제안한거에 어느정도 수정할지
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
-
-        imp_review_l2 = jnp.linalg.norm(_review, axis=-1)
-        gate_mean = jnp.mean(gate, axis=-1)
-        review_l2 = jnp.linalg.norm(review, axis=-1)
-
+        correction_l2 = jnp.linalg.norm(correction, axis=-1)
         out_l2 = jnp.linalg.norm(out, axis=-1)
 
-        return out, delta_v_l2, imp_review_l2, gate_mean, review_l2, out_l2
+        return out, delta_v_l2, correction_l2, out_l2
