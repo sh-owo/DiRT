@@ -44,7 +44,15 @@ def save_checkpoint(
     params,
     opt_state,
 ) -> None:
-    mngr.save(step, (jtu.tree_leaves(params), jtu.tree_leaves(opt_state)))
+    from jax.experimental.multihost_utils import process_allgather
+
+    params_full = process_allgather(params)
+    opt_full = process_allgather(opt_state)
+
+    if jax.process_index() == 0:
+        mngr.save(step, (jtu.tree_leaves(params_full), jtu.tree_leaves(opt_full)))
+    else:
+        jax.lax.barrier()
 
 
 def restore_checkpoint(
@@ -52,13 +60,22 @@ def restore_checkpoint(
     params,
     opt_state,
 ) -> Tuple[Optional[int], ...]:
+    from jax.experimental.multihost_utils import broadcast_one_to_all
+
     if mngr.latest_step() is None:
         return params, opt_state, 0
 
-    restored = mngr.restore(mngr.latest_step())
-    params = jtu.tree_unflatten(jtu.tree_structure(params), restored[0])
-    opt_state = jtu.tree_unflatten(jtu.tree_structure(opt_state), restored[1])
-    return params, opt_state, mngr.latest_step() + 1
+    if jax.process_index() == 0:
+        restored = mngr.restore(mngr.latest_step())
+        p_full = jtu.tree_unflatten(jtu.tree_structure(params), restored[0])
+        o_full = jtu.tree_unflatten(jtu.tree_structure(opt_state), restored[1])
+    else:
+        p_full = None
+        o_full = None
+
+    p_full = broadcast_one_to_all(p_full)
+    o_full = broadcast_one_to_all(o_full)
+    return p_full, o_full, mngr.latest_step() + 1
 
 
 def replicate_opt_state_scalars(opt_state, mesh):
