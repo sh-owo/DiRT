@@ -46,13 +46,11 @@ def save_checkpoint(
 ) -> None:
     from jax.experimental.multihost_utils import process_allgather
 
-    params_full = process_allgather(params)
-    opt_full = process_allgather(opt_state)
+    params_full = process_allgather(jtu.tree_leaves(params))
+    opt_full = process_allgather(jtu.tree_leaves(opt_state))
 
-    if jax.process_index() == 0:
-        mngr.save(step, (jtu.tree_leaves(params_full), jtu.tree_leaves(opt_full)))
-    else:
-        jax.lax.barrier()
+    mngr.save(step, (params_full, opt_full))
+    mngr.wait_until_finished()
 
 
 def restore_checkpoint(
