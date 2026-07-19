@@ -72,7 +72,11 @@ class ReviewBlock(nn.Module):
         out = z_L + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
+
+        imp_review_l2 = jnp.linalg.norm(_review, axis=-1)
         gate_mean = jnp.mean(gate, axis=-1)
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
-        return out, delta_v_l2, gate_mean, review_l2
+        out_l2 = jnp.linalg.norm(out, axis=-1)
+
+        return out, delta_v_l2, imp_review_l2, gate_mean, review_l2, out_l2

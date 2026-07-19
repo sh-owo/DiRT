@@ -44,9 +44,11 @@ class DiRTModel(nn.Module):
         return logits, all_metrics
 
     def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
-        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in ["delta_v", "gate", "review"]}
+        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in ["delta_v", "gate", "review", "imp_review", "out"]}
         return {
             "avg_delta_v": jnp.mean(stacked["delta_v"]),
+            "avg_imp_review": jnp.mean(stacked["imp_review"]),
             "avg_gate": jnp.mean(stacked["gate"]),
             "avg_review": jnp.mean(stacked["review"]),
+            "avg_out": jnp.mean(stacked["out"]),
         }
