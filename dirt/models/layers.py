@@ -21,9 +21,11 @@ class DirtLayer(nn.Module):
         sincos: tuple[jnp.ndarray, jnp.ndarray],
     ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         new = self.propose_block(z_L, positions, sincos)
-        z_L, delta_v_l2, correction_l2, out_l2 = self.review_block(z_L, new, positions, sincos)
+        z_L, delta_v_l2, imp_correction_l2, gate_mean, correction_l2, out_l2 = self.review_block(z_L, new, positions, sincos)
         metrics = {
             "delta_v": delta_v_l2,
+            "imp_correction": imp_correction_l2,
+            "gate": gate_mean,
             "correction": correction_l2,
             "out": out_l2,
         }

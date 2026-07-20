@@ -30,7 +30,9 @@ class ReviewBlock(nn.Module):
 
         self.gate_proj = nn.Dense(self.cfg.d_ffn, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "gate_proj")
         self.up_proj = nn.Dense(self.cfg.d_ffn, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "up_proj")
-        self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj") 
+        self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj")
+
+        self.gate = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init=out_init(self.cfg.n_blocks), dtype=self.dtype, name= "gate") 
 
 
     def __call__(
@@ -39,11 +41,11 @@ class ReviewBlock(nn.Module):
         new: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
 
-        delta_v =  new - z_L # propose가 뭘 제안했는지
+        delta_v =  new - z_L
 
         z_L_norm = self.norm_attn(z_L)
         delta_v_norm = self.norm_attn(delta_v)
@@ -63,12 +65,16 @@ class ReviewBlock(nn.Module):
         _delta_v = delta_v + attn_out
 
         ffn_norm = self.norm_ffn(_delta_v)
-        correction = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj) # 어떻게,어느정도 바꾸는게 좋을지 
+        _correction = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
+        gate = nn.sigmoid(self.gate(ffn_norm))
+        correction = gate * _correction
 
-        out = new + correction # propose가 제안한거에 어느정도 수정할지
+        out = new + correction
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
+        imp_correction_l2 = jnp.linalg.norm(_correction, axis=-1)
+        gate_mean = jnp.mean(gate, axis=-1)
         correction_l2 = jnp.linalg.norm(correction, axis=-1)
         out_l2 = jnp.linalg.norm(out, axis=-1)
 
-        return out, delta_v_l2, correction_l2, out_l2
+        return out, delta_v_l2, imp_correction_l2, gate_mean, correction_l2, out_l2
