@@ -62,18 +62,14 @@ def run_sft_training(cfg: DictConfig) -> None:
     model = DiRTModel(cfg=model_cfg)
 
     pretrained_path = cfg.get("pretrained_path", None)
-    if pretrained_path:
-        params = load_safetensors_checkpoint(pretrained_path, model_cfg, mesh)
-        if is_main:
-            print(f"loaded pretrained params from {pretrained_path}")
-    else:
-        key = jax.random.PRNGKey(cfg.seed)
-        key, init_key = jax.random.split(key)
-        dummy = jnp.ones((1, model_cfg.max_seq_len), dtype=jnp.int32)
-        variables = model.init(init_key, dummy, train=True)
-        params = variables["params"]
-        params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
-        params = shard_params(params, mesh, shard_fsdp=shard_fsdp, threshold=fsdp_threshold)
+    if pretrained_path is None:
+        raise ValueError(
+            "pretrained_path must be provided for SFT training. "
+            "Usage: pretrained_path=/path/to/model.safetensors"
+        )
+    params = load_safetensors_checkpoint(pretrained_path, model_cfg, mesh)
+    if is_main:
+        print(f"loaded pretrained params from {pretrained_path}")
 
     if is_main:
         print(f"params={count_params(params):,}")

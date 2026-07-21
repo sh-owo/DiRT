@@ -16,6 +16,7 @@ eval_batches: 32
 save_every: 500
 checkpoint_dir: checkpoints/dirt_sft
 keep_checkpoints: 5
+pretrained_path: null
 
 fsdp: true
 fsdp_size: 8
