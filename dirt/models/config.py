@@ -4,7 +4,6 @@ import jax.numpy as jnp
 @dataclass
 class ModelConfig:
     name: str
-    model_type: str = "dirt"
     vocab_size: int
     d_model: int
     n_blocks: int
@@ -16,6 +15,7 @@ class ModelConfig:
     rms_norm_eps: float
     attn_dropout: float
     dtype: str
+    model_type: str = "dirt"
 
 def dtype_from_name(name: str) -> jnp.dtype:
     if name == "float32":
