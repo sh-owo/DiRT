@@ -16,6 +16,7 @@ from tqdm import trange
 
 from dirt.models.config import ModelConfig
 from dirt.models.model import DiRTModel
+from dirt.models.base_model import BaseModel
 from dirt.train.checkpoint import (
     init_checkpoint,
     replicate_opt_state_scalars,
@@ -41,6 +42,7 @@ def build_model_config(cfg: DictConfig) -> ModelConfig:
     m = cfg.model
     return ModelConfig(
         name=m.name,
+        model_type=m.get("model_type", "dirt"),
         vocab_size=m.vocab_size,
         d_model=m.d_model,
         n_blocks=m.n_blocks,
@@ -139,7 +141,10 @@ def run_training(cfg: DictConfig) -> None:
         print(f"mesh={mesh}")
     sync_global_devices("mesh_created")
 
-    model = DiRTModel(cfg=model_cfg)
+    if model_cfg.model_type == "base":
+        model = BaseModel(cfg=model_cfg)
+    else:
+        model = DiRTModel(cfg=model_cfg)
 
     key = jax.random.PRNGKey(cfg.seed)
     key, init_key = jax.random.split(key)
@@ -182,6 +187,9 @@ def run_training(cfg: DictConfig) -> None:
             tree, shardings,
         )
 
+    diirt_metric_keys = ["delta_v", "imp_review", "gate", "review", "out"]
+    metric_keys = diirt_metric_keys if model_cfg.model_type != "base" else []
+
     @partial(jax.jit, donate_argnums=(0, 1))
     def train_step(params, opt_state, x, y, key):
         params = _constrain_tree(params, param_shardings)
@@ -196,7 +204,7 @@ def run_training(cfg: DictConfig) -> None:
             per_block = {
                 f"block_{i}/{k}": jnp.mean(m[k])
                 for i, m in enumerate(all_metrics[:-1])
-                for k in ["delta_v", "imp_review", "gate", "review", "out"]
+                for k in metric_keys
             }
             return loss, {**per_block, **all_metrics[-1]}
 
@@ -220,7 +228,7 @@ def run_training(cfg: DictConfig) -> None:
         per_block = {
             f"block_{i}/{k}": jnp.mean(m[k])
             for i, m in enumerate(all_metrics[:-1])
-            for k in ["delta_v", "imp_review", "gate", "review", "out"]
+            for k in metric_keys
         }
         return loss, {**per_block, **all_metrics[-1]}
 

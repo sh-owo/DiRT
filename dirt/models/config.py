@@ -4,6 +4,7 @@ import jax.numpy as jnp
 @dataclass
 class ModelConfig:
     name: str
+    model_type: str = "dirt"
     vocab_size: int
     d_model: int
     n_blocks: int
