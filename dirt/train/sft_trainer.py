@@ -61,7 +61,7 @@ def run_sft_training(cfg: DictConfig) -> None:
 
     model = DiRTModel(cfg=model_cfg)
 
-    pretrained_path = cfg.get("pretrained_path", None)
+    pretrained_path = cfg.train.get("pretrained_path", None)
     if pretrained_path is None:
         raise ValueError(
             "pretrained_path must be provided for SFT training. "
