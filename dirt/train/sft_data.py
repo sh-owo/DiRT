@@ -133,6 +133,7 @@ def create_sft_data_iter(
                     full_ids = full_ids[:seq_len + 1]
 
             N = len(full_ids)
+            prompt_len = min(prompt_len, max(0, N - 2))
             n_prompt_targets = max(0, prompt_len - 1)
 
             x = full_ids[:-1] if N > 1 else full_ids
