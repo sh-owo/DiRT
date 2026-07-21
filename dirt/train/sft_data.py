@@ -91,16 +91,17 @@ def create_sft_data_iter(
     hf_split = data_cfg.train_split if split == "train" else data_cfg.eval_split
 
     if hf_split == data_cfg.eval_split and hf_split == data_cfg.train_split:
-        ds = _load_stream(hf_name, hf_split, shuffle_buffer=0, seed=0, streaming=False)
-        n_total = len(ds)
+        from datasets import load_dataset
+        dataset = load_dataset(hf_name, split=hf_split, streaming=False)
+        n_total = len(dataset)
         n_eval = int(n_total * eval_percent / 100.0)
         if split == "eval":
-            stream = iter(ds.take(n_eval))
+            stream = iter(dataset.take(n_eval))
         else:
-            ds = ds.skip(n_eval)
+            train_ds = dataset.skip(n_eval)
             if data_cfg.shuffle_buffer > 0:
-                ds = ds.shuffle(seed=0, buffer_size=data_cfg.shuffle_buffer)
-            stream = iter(ds)
+                train_ds = train_ds.shuffle(seed=0, buffer_size=data_cfg.shuffle_buffer)
+            stream = iter(train_ds)
     else:
         shuffle = data_cfg.shuffle_buffer if split == "train" else 0
         stream = _load_stream(hf_name, hf_split, shuffle, 0)
