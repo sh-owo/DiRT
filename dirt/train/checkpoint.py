@@ -4,6 +4,7 @@ import os
 from typing import Optional, Tuple, Callable
 
 import jax
+import jax.numpy as jnp
 import orbax.checkpoint as ocp
 
 from dirt.train.sharding import reshard, get_replicated_sharding
@@ -110,3 +111,30 @@ def sync_checkpoint(mngr, step, params, opt_state, gcs_target):
         fs = gcsfs.GCSFileSystem()
         fs.put(mngr.directory, gcs_target, recursive=True)
         shutil.rmtree(mngr.directory)
+
+
+def _unflatten(flat: dict) -> dict:
+    result = {}
+    for key, value in flat.items():
+        parts = key.split("/")
+        d = result
+        for part in parts[:-1]:
+            d = d.setdefault(part, {})
+        d[parts[-1]] = value
+    return result
+
+
+def load_safetensors_checkpoint(path: str, model_cfg, mesh) -> dict:
+    from safetensors.flax import load_file
+
+    flat = load_file(path)
+    params = _unflatten(flat)
+    from dirt.models.config import dtype_from_name
+    dtype = jnp.dtype(dtype_from_name(model_cfg.dtype))
+    params = jax.tree_util.tree_map(
+        lambda x: x.astype(dtype) if isinstance(x, jax.Array) else x,
+        params,
+    )
+    from dirt.train.sharding import shard_params
+    params = shard_params(params, mesh, shard_fsdp=True, threshold=262144)
+    return params

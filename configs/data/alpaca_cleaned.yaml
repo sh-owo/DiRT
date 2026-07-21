@@ -1,0 +1,10 @@
+backend: hf_sft
+hf_name: yahma/alpaca-cleaned
+train_split: train
+eval_split: train
+eval_percent: 5
+response_marker: "### Response:\n"
+tokenizer_model: data/tokenizer
+eos_id: 1
+shuffle_buffer: 10000
+text_key: text
