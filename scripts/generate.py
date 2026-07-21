@@ -3,7 +3,7 @@ from __future__ import annotations
 import hydra
 from omegaconf import DictConfig
 
-from dirt.infernece.generate import run_generation
+from dirt.inference.generate import run_generation
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")

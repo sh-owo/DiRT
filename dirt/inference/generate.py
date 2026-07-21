@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
-from dirt.eval.common import load_model
+from dirt.inference.common import load_model
 from dirt.inference.sampler import sample_next_token
 from dirt.models.config import ModelConfig
 

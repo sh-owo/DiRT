@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from dirt.eval import mmlu_pro
-from dirt.eval.common import load_model
+from dirt.inference.common import load_model
 from dirt.models.config import ModelConfig
 
 
