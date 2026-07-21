@@ -100,7 +100,7 @@ def create_sft_data_iter(
         else:
             train_ds = dataset.skip(n_eval)
             if data_cfg.shuffle_buffer > 0:
-                train_ds = train_ds.shuffle(seed=0, buffer_size=data_cfg.shuffle_buffer)
+                train_ds = train_ds.shuffle(seed=0)
             stream = iter(train_ds)
     else:
         shuffle = data_cfg.shuffle_buffer if split == "train" else 0
