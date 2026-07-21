@@ -1,12 +1,7 @@
-defaults:
-  - model: dirt_700m
-  - _self_
-
-inference:
-  model_path: ???
-  tokenizer_model: ???
-  temperature: 0.8
-  top_p: 0.95
-  top_k: 0
-  max_new_tokens: 256
-  prompt: "Brain-inspired language model is"
+model_path: null
+tokenizer_path: null
+temperature: 0.8
+top_p: 0.95
+top_k: 0
+max_new_tokens: 256
+prompt: Langauge model is 

@@ -5,17 +5,10 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
-from omegaconf import DictConfig, OmegaConf
 
 from dirt.inference.common import load_model
 from dirt.inference.sampler import sample_next_token
 from dirt.models.config import ModelConfig
-
-
-def _to_dict(cfg: DictConfig) -> dict:
-    if isinstance(cfg, DictConfig):
-        return OmegaConf.to_container(cfg, resolve=True)
-    return dict(cfg)
 
 
 def _load_tokenizer(tokenizer_model: str):
@@ -26,25 +19,7 @@ def _load_tokenizer(tokenizer_model: str):
     return spm.SentencePieceProcessor(model_file=tokenizer_model)
 
 
-def run_generation(cfg: DictConfig) -> str:
-    model_cfg_dict = _to_dict(cfg.model)
-    infer_cfg = _to_dict(cfg.inference)
-
-    model_cfg = ModelConfig(
-        name=model_cfg_dict["name"],
-        vocab_size=model_cfg_dict["vocab_size"],
-        d_model=model_cfg_dict["d_model"],
-        n_blocks=model_cfg_dict["n_blocks"],
-        n_heads=model_cfg_dict["n_heads"],
-        head_dim=model_cfg_dict["head_dim"],
-        d_ffn=model_cfg_dict["d_ffn"],
-        max_seq_len=model_cfg_dict["max_seq_len"],
-        rope_base=model_cfg_dict["rope_base"],
-        rms_norm_eps=model_cfg_dict["rms_norm_eps"],
-        attn_dropout=model_cfg_dict.get("attn_dropout", 0.0),
-        dtype=model_cfg_dict["dtype"],
-    )
-
+def run_generation(model_cfg: ModelConfig, infer_cfg: dict) -> str:
     model, params = load_model(Path(infer_cfg["model_path"]), model_cfg)
     tokenizer = _load_tokenizer(infer_cfg["tokenizer_model"])
 
