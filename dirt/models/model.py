@@ -1,3 +1,6 @@
+from typing import Optional
+
+import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
@@ -23,15 +26,25 @@ class DiRTModel(nn.Module):
         ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
 
-    def __call__(self, input_ids: jnp.ndarray, train: bool) -> tuple[jnp.ndarray, list[dict[str, jnp.ndarray]]]:
+    def __call__(
+        self,
+        input_ids: jnp.ndarray,
+        train: bool,
+        attention_mask: Optional[jnp.ndarray] = None,
+    ) -> tuple[jnp.ndarray, list[dict[str, jnp.ndarray]]]:
         batch, seq_len = input_ids.shape
         x = self.token_embedding(input_ids).astype(self.dtype)
         positions = jnp.arange(seq_len, dtype=jnp.int32)
         sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
+        padding_mask = None
+        if attention_mask is not None:
+            mask = attention_mask[:, None, None, :]  # (B, 1, 1, S)
+            padding_mask = jnp.where(mask == 0, jnp.finfo(self.dtype).min, 0.0)
+
         all_metrics = []
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos)
+            x, metrics = block(x, positions, sincos, padding_mask)
             all_metrics.append(metrics)
 
         x = self.final_norm(x)
