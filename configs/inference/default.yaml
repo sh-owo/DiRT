@@ -3,5 +3,6 @@ tokenizer_path: null
 temperature: 0.8
 top_p: 0.95
 top_k: 0
+repetition_penalty: 1.1
 max_new_tokens: 256
 prompt: Langauge model is 

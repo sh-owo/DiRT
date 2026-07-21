@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top-p", type=float, default=0.95, help="Top-p (nucleus) sampling parameter")
     parser.add_argument("--top-k", type=int, default=0, help="Top-k sampling parameter (0 = disabled)")
+    parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty (>1.0 discourages repeated tokens)")
     args = parser.parse_args()
 
     with open(args.config_path) as f:
@@ -41,6 +42,7 @@ def main():
         "temperature": args.temperature,
         "top_p": args.top_p,
         "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
     }
 
     result = run_generation(model_cfg, infer_cfg)

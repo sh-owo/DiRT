@@ -26,13 +26,31 @@ def _top_p_filter(logits: jnp.ndarray, top_p: float) -> jnp.ndarray:
     return jnp.take_along_axis(sorted_filtered, inverse_idx, axis=-1)
 
 
+def _repetition_penalty_filter(
+    logits: jnp.ndarray,
+    prev_tokens: list[int],
+    penalty: float,
+) -> jnp.ndarray:
+    if penalty <= 1.0 or not prev_tokens:
+        return logits
+    unique = jnp.array(list(set(prev_tokens)), dtype=jnp.int32)
+    prev = logits[unique]
+    penalized = jnp.where(prev > 0, prev / penalty, prev * penalty)
+    return logits.at[unique].set(penalized)
+
+
 def sample_next_token(
     rng: jnp.ndarray,
     logits: jnp.ndarray,
     temperature: float,
     top_p: float,
     top_k: int,
+    repetition_penalty: float = 1.0,
+    prev_tokens: list[int] | None = None,
 ) -> jnp.ndarray:
+    logits = _repetition_penalty_filter(logits, prev_tokens or [], repetition_penalty)
+    if temperature <= 0.0:
+        return jnp.argmax(logits, axis=-1)
     temp = jnp.maximum(jnp.asarray(temperature, dtype=jnp.float32), 1e-5)
     scaled = logits / temp
     filtered = _top_k_filter(scaled, int(top_k))
