@@ -21,6 +21,7 @@ class ReviewBlock(nn.Module):
     def setup(self) -> None:
         head_dim = self.cfg.head_dim
         self.norm_attn = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
+        self.norm_z_L = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
         self.norm_ffn = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
 
         self.q_proj = nn.Dense(self.cfg.n_heads * head_dim, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "q_proj")
@@ -47,7 +48,7 @@ class ReviewBlock(nn.Module):
 
         delta_v =  new - z_L
 
-        z_L_norm = self.norm_attn(z_L)
+        z_L_norm = self.norm_z_L(z_L)
         delta_v_norm = self.norm_attn(delta_v)
         q = self.q_proj(delta_v_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
         k = self.k_proj(z_L_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
