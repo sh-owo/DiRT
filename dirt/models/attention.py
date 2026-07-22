@@ -30,3 +30,12 @@ def cross_attention(
     v: jnp.ndarray, 
 ) -> jnp.ndarray:
     return scaled_dot_product_attention(q, k, v, None)
+
+def causal_cross_attention(
+    q: jnp.ndarray,
+    k: jnp.ndarray,
+    v: jnp.ndarray,
+) -> jnp.ndarray:
+    seq_len = q.shape[-2]
+    mask = causal_mask(seq_len, q.dtype)[None, None, :, :]
+    return scaled_dot_product_attention(q, k, v, mask)
