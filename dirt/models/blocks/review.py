@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from dirt.models.config import ModelConfig
 from dirt.models.common import RMSNorm, apply_rope, swiglu
-from dirt.models.attention import cross_attention
+from dirt.models.attention import causal_cross_attention
 
 def default_init():
     return nn.initializers.normal(stddev=0.02)
@@ -58,7 +58,7 @@ class ReviewBlock(nn.Module):
         v_t = jnp.transpose(v, (0, 2, 1, 3))
 
         q_t, k_t = apply_rope(q_t, k_t, sincos, positions)
-        attn_out = cross_attention(q_t, k_t, v_t)
+        attn_out = causal_cross_attention(q_t, k_t, v_t)
         attn_out = jnp.transpose(attn_out, (0, 2, 1, 3)).reshape(batch, seq_len, self.cfg.d_model)
         attn_out = self.o_proj(attn_out)
 
