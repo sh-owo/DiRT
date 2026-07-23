@@ -196,7 +196,7 @@ def run_training(cfg: DictConfig) -> None:
             per_block = {
                 f"block_{i}/{k}": jnp.mean(m[k])
                 for i, m in enumerate(all_metrics[:-1])
-                for k in ["delta_v", "imp_review", "gate", "review", "out"]
+            for k in ["delta_v", "imp_review", "magnitude_mean", "scaled_magnitude_mean", "review", "out"]
             }
             return loss, {**per_block, **all_metrics[-1]}
 
