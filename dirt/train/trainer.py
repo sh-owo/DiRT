@@ -208,7 +208,7 @@ def run_training(cfg: DictConfig) -> None:
         params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
         return params, opt_state, loss, metrics_agg, grad_norm
 
-    @partial(jax.jit, donate_argnums=(0,))
+    @jax.jit
     def eval_step(params, x, y):
         params = _constrain_tree(params, param_shardings)
         x = jax.lax.with_sharding_constraint(x, data_sharding)
