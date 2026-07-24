@@ -235,7 +235,7 @@ def run_training(cfg: DictConfig) -> None:
 
     if is_main:
         wandb.init(
-            project="dirt_sft",
+            project="dirt-sft",
             config={
                 "model": dict(model_cfg.__dict__),
                 "train": dict(train_cfg),

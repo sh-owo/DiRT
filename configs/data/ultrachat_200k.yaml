@@ -1,5 +1,6 @@
 backend: hf_stream
 hf_name: HuggingFaceH4/ultrachat_200k
+hf_config: null
 train_split: train_sft
 eval_split: test_sft
 tokenizer_model: data/tokenizer
