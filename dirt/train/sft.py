@@ -206,7 +206,7 @@ def run_training(cfg: DictConfig) -> None:
         params = cast_pytree(params, jnp.dtype(cfg.model.dtype))
         return params, opt_state, loss, metrics_agg, grad_norm
 
-    @partial(jax.jit, donate_argnums=(0,))
+    @partial(jax.jit)
     def eval_step(params, x, y, loss_mask):
         params = _constrain_tree(params, param_shardings)
         x = jax.lax.with_sharding_constraint(x, data_sharding)
@@ -223,6 +223,15 @@ def run_training(cfg: DictConfig) -> None:
             for k, v in m.items()
         }
         return loss, {**per_block, **all_metrics[-1]}
+
+    tokenizer = None
+    if data_cfg.get("backend") == "hf_stream":
+        tokenizer_path = data_cfg.tokenizer_model
+        if not os.path.isabs(tokenizer_path):
+            from hydra.utils import to_absolute_path
+            tokenizer_path = to_absolute_path(tokenizer_path)
+        from dirt.train.sft_data import _load_tokenizer
+        tokenizer = _load_tokenizer(tokenizer_path)
 
     train_iter = create_data_iter(
         "train", data_cfg, model_cfg.max_seq_len,
@@ -259,17 +268,24 @@ def run_training(cfg: DictConfig) -> None:
         if step > 0 and step % train_cfg.eval_every == 0:
             eval_losses = []
             eval_metrics = []
+            sample_text = None
             num_eval = train_cfg.get("eval_batches", 64)
-            for _ in range(num_eval):
+            for i in range(num_eval):
                 x_eval, y_eval, mask_eval = next(eval_iter)
                 loss_val, eval_agg = eval_step(params, x_eval, y_eval, mask_eval)
                 eval_losses.append(loss_val.item())
                 eval_metrics.append({k: v.item() for k, v in eval_agg.items()})
+                if i == 0 and tokenizer is not None:
+                    x_host = jax.device_get(x_eval[0])
+                    sample_text = tokenizer.decode(x_host.tolist())
             avg_val = float(np.mean(eval_losses))
             avg_metrics = {k: float(np.mean([m[k] for m in eval_metrics])) for k in eval_metrics[0]}
             postfix["val_loss"] = avg_val
             if is_main:
-                wandb.log({"loss/val": avg_val, **{f"metrics/val_{k}": v for k, v in avg_metrics.items()}}, step=step)
+                log_dict = {"loss/val": avg_val, **{f"metrics/val_{k}": v for k, v in avg_metrics.items()}}
+                if sample_text is not None:
+                    log_dict["eval_sample"] = sample_text
+                wandb.log(log_dict, step=step)
 
         key, step_key = jax.random.split(key)
         x, y, loss_mask = next(train_iter)
