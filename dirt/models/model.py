@@ -37,14 +37,9 @@ class DiRTModel(nn.Module):
         positions = jnp.arange(seq_len, dtype=jnp.int32)
         sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
-        padding_mask = None
-        if attention_mask is not None:
-            mask = attention_mask[:, None, None, :]  # (B, 1, 1, S)
-            padding_mask = jnp.where(mask == 0, jnp.finfo(self.dtype).min, 0.0)
-
         all_metrics = []
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos, padding_mask)
+            x, metrics = block(x, positions, sincos)
             all_metrics.append(metrics)
 
         x = self.final_norm(x)
@@ -57,11 +52,5 @@ class DiRTModel(nn.Module):
         return logits, all_metrics
 
     def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
-        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in ["delta_v", "gate", "review", "imp_review", "out"]}
-        return {
-            "avg_delta_v": jnp.mean(stacked["delta_v"]),
-            "avg_imp_review": jnp.mean(stacked["imp_review"]),
-            "avg_gate": jnp.mean(stacked["gate"]),
-            "avg_review": jnp.mean(stacked["review"]),
-            "avg_out": jnp.mean(stacked["out"]),
-        }
+        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in all_metrics[0].keys()}
+        return {f"avg_{k}": jnp.mean(v) for k, v in stacked.items()}

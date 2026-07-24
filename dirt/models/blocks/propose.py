@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 
 from dirt.models.config import ModelConfig
-from typing import Optional
 
 from dirt.models.common import RMSNorm, apply_rope, swiglu
 from dirt.models.attention import causal_attention
@@ -40,7 +39,6 @@ class ProposeBlock(nn.Module):
         z_L: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-        padding_mask: Optional[jnp.ndarray] = None,
     ) -> jnp.ndarray:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
@@ -56,7 +54,7 @@ class ProposeBlock(nn.Module):
         v_t = jnp.transpose(v, (0, 2, 1, 3))
 
         q_t, k_t = apply_rope(q_t, k_t, sincos, positions)
-        attn_out = causal_attention(q_t, k_t, v_t, padding_mask)
+        attn_out = causal_attention(q_t, k_t, v_t)
         attn_out = jnp.transpose(attn_out, (0, 2, 1, 3)).reshape(batch, seq_len, self.cfg.d_model)
         attn_out = self.o_proj(attn_out)
 
