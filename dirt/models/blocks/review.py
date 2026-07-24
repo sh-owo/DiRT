@@ -20,6 +20,7 @@ class ReviewBlock(nn.Module):
 
     def setup(self) -> None:
         head_dim = self.cfg.head_dim
+        self.norm_z_L = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
         self.norm_attn = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
         self.norm_ffn = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
 
@@ -32,7 +33,7 @@ class ReviewBlock(nn.Module):
         self.up_proj = nn.Dense(self.cfg.d_ffn, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "up_proj")
         self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj") 
 
-        self.prob_linear = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "prob_linear")
+        self.magnitude_linear = nn.Dense(1, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "magnitude_linear")
 
 
     def __call__(
@@ -47,7 +48,7 @@ class ReviewBlock(nn.Module):
 
         delta_v =  new - z_L
 
-        z_L_norm = self.norm_attn(z_L)
+        z_L_norm = self.norm_z_L(z_L)
         delta_v_norm = self.norm_attn(delta_v)
         q = self.q_proj(delta_v_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
         k = self.k_proj(z_L_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
@@ -66,7 +67,8 @@ class ReviewBlock(nn.Module):
         ffn_norm = self.norm_ffn(_delta_v)
         _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
 
-        gate = nn.sigmoid(self.prob_linear(_review))
+        magnitude = self.magnitude_linear(_review)
+        gate = nn.sigmoid(magnitude)
         review = gate * _review
 
         out = z_L + review
