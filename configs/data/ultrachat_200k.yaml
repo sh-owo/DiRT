@@ -1,11 +1,9 @@
 backend: hf_stream
-hf_name: Skylion007/openwebtext
-train_split: train
-eval_split: train
-text_key: text
+hf_name: HuggingFaceH4/ultrachat_200k
+train_split: train_sft
+eval_split: test_sft
 tokenizer_model: data/tokenizer
 eos_id: 1
-seq_len: 2048
 shuffle_buffer: 10000
 prefetch_batches: 8
 use_local_shards: false

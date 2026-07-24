@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
+import os
 from functools import partial
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -11,32 +14,106 @@ from jax.experimental.multihost_utils import sync_global_devices
 from omegaconf import DictConfig
 from tqdm import trange
 
+from dirt.models.config import ModelConfig
 from dirt.models.model import DiRTModel
 from dirt.train.checkpoint import (
     init_checkpoint,
     replicate_opt_state_scalars,
     sync_checkpoint,
-    load_safetensors_checkpoint,
 )
-from dirt.train.sft_data import create_sft_data_iter
-from dirt.train.sharding import shard_params
-from dirt.train.trainer import (
-    Array,
-    build_model_config,
-    compute_total_steps,
-    create_mesh_from_config,
-    build_optimizer,
-    cast_pytree,
-    count_params,
-)
-from dirt.train.trainer import _is_leaf as _is_array
+from dirt.train.sft_data import create_data_iter
+from dirt.train.sharding import create_mesh
 
 jax.config.update("jax_threefry_partitionable", True)
 
+Array = jax.Array
 jtu = jax.tree_util
 
 
-def run_sft_training(cfg: DictConfig) -> None:
+def _is_leaf(x):
+    return isinstance(x, Array)
+
+
+def build_model_config(cfg: DictConfig) -> ModelConfig:
+    m = cfg.model
+    return ModelConfig(
+        name=m.name,
+        vocab_size=m.vocab_size,
+        d_model=m.d_model,
+        n_blocks=m.n_blocks,
+        n_heads=m.n_heads,
+        head_dim=m.head_dim,
+        d_ffn=m.d_ffn,
+        max_seq_len=m.max_seq_len,
+        rope_base=m.rope_base,
+        rms_norm_eps=m.rms_norm_eps,
+        attn_dropout=m.get("attn_dropout", 0.0),
+        dtype=m.dtype,
+    )
+
+
+def compute_total_steps(train_cfg: DictConfig, model_cfg: ModelConfig) -> int:
+    tokens_per_step = (
+        train_cfg.global_batch_size
+        * model_cfg.max_seq_len
+        * train_cfg.get("grad_accum_steps", 1)
+    )
+    total_tokens = train_cfg.target_train_tokens
+    total = math.ceil(total_tokens / tokens_per_step)
+    if train_cfg.max_steps is not None and train_cfg.max_steps > 0:
+        total = min(total, train_cfg.max_steps)
+    return total
+
+
+def create_mesh_from_config(train_cfg: DictConfig):
+    devices = jax.devices()
+    n = len(devices)
+    fsdp_size = train_cfg.get("fsdp_size", 8)
+    if fsdp_size > n:
+        fsdp_size = n
+    while n % fsdp_size != 0:
+        fsdp_size //= 2
+    replica_size = n // fsdp_size
+    return create_mesh((replica_size, fsdp_size), ("replica", "data"))
+
+
+def build_optimizer(
+    train_cfg: DictConfig, total_steps: int
+) -> Tuple[optax.GradientTransformation, optax.Schedule]:
+    scheduler = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=train_cfg.lr_peak,
+        warmup_steps=train_cfg.warmup_steps,
+        decay_steps=total_steps,
+        end_value=train_cfg.lr_end,
+    )
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(train_cfg.grad_clip),
+        optax.scale_by_adam(
+            b1=train_cfg.adam_beta1,
+            b2=train_cfg.adam_beta2,
+            eps=train_cfg.adam_eps,
+        ),
+        optax.add_decayed_weights(train_cfg.weight_decay),
+        optax.scale_by_schedule(scheduler),
+        optax.scale(-1),
+    )
+    return optimizer, scheduler
+
+
+def cast_pytree(pytree, dtype: jnp.dtype):
+    def _cast(x):
+        if isinstance(x, Array):
+            return x.astype(dtype)
+        return x
+    return jtu.tree_map(_cast, pytree)
+
+
+def count_params(params) -> int:
+    return sum(x.size for x in jtu.tree_leaves(params) if isinstance(x, Array))
+
+
+def run_training(cfg: DictConfig) -> None:
     proc_idx = jax.process_index()
     is_main = proc_idx == 0
 
@@ -47,9 +124,6 @@ def run_sft_training(cfg: DictConfig) -> None:
     model_cfg = build_model_config(cfg)
     train_cfg = cfg.train
     data_cfg = cfg.data
-    shard_fsdp = train_cfg.get("fsdp", True)
-    fsdp_threshold = train_cfg.get("fsdp_threshold", 2**18)
-
     total_steps = compute_total_steps(train_cfg, model_cfg)
     if is_main:
         print(f"total_steps={total_steps}")
@@ -61,29 +135,31 @@ def run_sft_training(cfg: DictConfig) -> None:
 
     model = DiRTModel(cfg=model_cfg)
 
-    pretrained_path = cfg.train.get("pretrained_path", None)
-    if pretrained_path is None:
-        raise ValueError(
-            "pretrained_path must be provided for SFT training. "
-            "Usage: pretrained_path=/path/to/model.safetensors"
-        )
-    params = load_safetensors_checkpoint(pretrained_path, model_cfg, mesh)
-    if is_main:
-        print(f"loaded pretrained params from {pretrained_path}")
+    key = jax.random.PRNGKey(cfg.seed)
 
+    p = train_cfg.pretrained_path
+    if p is None:
+        raise ValueError("SFT requires 'train.pretrained_path' to be set")
+    if not os.path.isabs(p):
+        from hydra.utils import to_absolute_path
+        p = to_absolute_path(p)
+
+    from dirt.train.checkpoint import load_safetensors_checkpoint
+    params = load_safetensors_checkpoint(p, model_cfg, mesh)
     if is_main:
+        print(f"Loaded pretrained model from {p}")
         print(f"params={count_params(params):,}")
 
     def _sharding_of(x):
-        return x.sharding if isinstance(x, jax.Array) else None
+        return x.sharding if isinstance(x, Array) else None
 
-    param_shardings = jtu.tree_map(_sharding_of, params, is_leaf=_is_array)
+    param_shardings = jtu.tree_map(_sharding_of, params, is_leaf=_is_leaf)
 
     optimizer, lr_schedule = build_optimizer(train_cfg, total_steps)
     opt_state = optimizer.init(params)
 
     opt_state = replicate_opt_state_scalars(opt_state, mesh)
-    opt_state_shardings = jtu.tree_map(_sharding_of, opt_state, is_leaf=_is_array)
+    opt_state_shardings = jtu.tree_map(_sharding_of, opt_state, is_leaf=_is_leaf)
 
     mngr, params, opt_state, first_step, ckpt_dir, gcs_target = init_checkpoint(
         cfg.checkpoint_path, train_cfg.checkpoint_dir, model_cfg.name,
@@ -97,30 +173,28 @@ def run_sft_training(cfg: DictConfig) -> None:
     def _constrain_tree(tree, shardings):
         return jtu.tree_map(
             lambda t, s: jax.lax.with_sharding_constraint(t, s)
-            if isinstance(t, jax.Array) and s is not None
+            if isinstance(t, Array) and s is not None
             else t,
             tree, shardings,
         )
 
     @partial(jax.jit, donate_argnums=(0, 1))
-    def train_step(params, opt_state, x, y, attn_mask, loss_mask, key):
+    def train_step(params, opt_state, x, y, loss_mask, key):
         params = _constrain_tree(params, param_shardings)
         opt_state = _constrain_tree(opt_state, opt_state_shardings)
         x = jax.lax.with_sharding_constraint(x, data_sharding)
         y = jax.lax.with_sharding_constraint(y, data_sharding)
-        attn_mask = jax.lax.with_sharding_constraint(attn_mask, data_sharding)
         loss_mask = jax.lax.with_sharding_constraint(loss_mask, data_sharding)
 
         def loss_fn(p):
-            logits, all_metrics = model.apply({"params": p}, x, train=True, attention_mask=attn_mask)
+            logits, all_metrics = model.apply({"params": p}, x, train=True)
             logits = logits.astype(jnp.float32)
-            per_token = optax.softmax_cross_entropy_with_integer_labels(logits, y)
-            masked = per_token * loss_mask
-            loss = masked.sum() / jnp.maximum(loss_mask.sum(), 1.0)
+            losses = optax.softmax_cross_entropy_with_integer_labels(logits, y)
+            loss = (losses * loss_mask).sum() / (loss_mask.sum() + 1e-8)
             per_block = {
-                f"block_{i}/{k}": jnp.mean(m[k])
+                f"block_{i}/{k}": jnp.mean(v)
                 for i, m in enumerate(all_metrics[:-1])
-                for k in ["delta_v", "imp_review", "gate", "review", "out"]
+                for k, v in m.items()
             }
             return loss, {**per_block, **all_metrics[-1]}
 
@@ -133,46 +207,42 @@ def run_sft_training(cfg: DictConfig) -> None:
         return params, opt_state, loss, metrics_agg, grad_norm
 
     @partial(jax.jit, donate_argnums=(0,))
-    def eval_step(params, x, y, attn_mask, loss_mask):
+    def eval_step(params, x, y, loss_mask):
         params = _constrain_tree(params, param_shardings)
         x = jax.lax.with_sharding_constraint(x, data_sharding)
         y = jax.lax.with_sharding_constraint(y, data_sharding)
-        attn_mask = jax.lax.with_sharding_constraint(attn_mask, data_sharding)
         loss_mask = jax.lax.with_sharding_constraint(loss_mask, data_sharding)
 
-        logits, all_metrics = model.apply({"params": params}, x, train=False, attention_mask=attn_mask)
+        logits, all_metrics = model.apply({"params": params}, x, train=False)
         logits = logits.astype(jnp.float32)
-        per_token = optax.softmax_cross_entropy_with_integer_labels(logits, y)
-        masked = per_token * loss_mask
-        loss = masked.sum() / jnp.maximum(loss_mask.sum(), 1.0)
+        losses = optax.softmax_cross_entropy_with_integer_labels(logits, y)
+        loss = (losses * loss_mask).sum() / (loss_mask.sum() + 1e-8)
         per_block = {
-            f"block_{i}/{k}": jnp.mean(m[k])
+            f"block_{i}/{k}": jnp.mean(v)
             for i, m in enumerate(all_metrics[:-1])
-            for k in ["delta_v", "imp_review", "gate", "review", "out"]
+            for k, v in m.items()
         }
         return loss, {**per_block, **all_metrics[-1]}
 
-    train_iter = create_sft_data_iter(
+    train_iter = create_data_iter(
         "train", data_cfg, model_cfg.max_seq_len,
         train_cfg.global_batch_size, mesh,
     )
-    eval_iter = create_sft_data_iter(
-        "eval", data_cfg, model_cfg.max_seq_len,
+    eval_iter = create_data_iter(
+        "val", data_cfg, model_cfg.max_seq_len,
         train_cfg.global_batch_size, mesh,
     )
 
     if is_main:
         wandb.init(
-            project="dirt-sft",
+            project="dirt_sft",
             config={
                 "model": dict(model_cfg.__dict__),
                 "train": dict(train_cfg),
                 "data": dict(data_cfg),
                 "total_steps": total_steps,
                 "n_params": count_params(params),
-                "shard_fsdp": shard_fsdp,
-                "fsdp_threshold": fsdp_threshold,
-                "pretrained_path": pretrained_path,
+                "pretrained_path": p,
             },
         )
 
@@ -189,10 +259,10 @@ def run_sft_training(cfg: DictConfig) -> None:
         if step > 0 and step % train_cfg.eval_every == 0:
             eval_losses = []
             eval_metrics = []
-            num_eval = train_cfg.get("eval_batches", 32)
+            num_eval = train_cfg.get("eval_batches", 64)
             for _ in range(num_eval):
-                x_eval, y_eval, attn_eval, lm_eval = next(eval_iter)
-                loss_val, eval_agg = eval_step(params, x_eval, y_eval, attn_eval, lm_eval)
+                x_eval, y_eval, mask_eval = next(eval_iter)
+                loss_val, eval_agg = eval_step(params, x_eval, y_eval, mask_eval)
                 eval_losses.append(loss_val.item())
                 eval_metrics.append({k: v.item() for k, v in eval_agg.items()})
             avg_val = float(np.mean(eval_losses))
@@ -201,11 +271,9 @@ def run_sft_training(cfg: DictConfig) -> None:
             if is_main:
                 wandb.log({"loss/val": avg_val, **{f"metrics/val_{k}": v for k, v in avg_metrics.items()}}, step=step)
 
-        key = jax.random.PRNGKey(step)
-        x, y, attn_batch, lm_batch = next(train_iter)
-        params, opt_state, loss, agg_metrics, grad_norm = train_step(
-            params, opt_state, x, y, attn_batch, lm_batch, key,
-        )
+        key, step_key = jax.random.split(key)
+        x, y, loss_mask = next(train_iter)
+        params, opt_state, loss, agg_metrics, grad_norm = train_step(params, opt_state, x, y, loss_mask, step_key)
         loss_val = loss.item()
 
         if step % train_cfg.save_every == 0:

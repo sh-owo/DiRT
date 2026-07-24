@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob as glob_module
 import os
 from typing import Iterator, Tuple
 
@@ -17,60 +18,90 @@ NamedSharding = jax.sharding.NamedSharding
 P = jax.sharding.PartitionSpec
 
 
+Array = jax.Array
+
+
 def _load_tokenizer(path: str):
     try:
         import sentencepiece as spm
     except ImportError as exc:
-        raise ImportError("sentencepiece is required for SFT data") from exc
+        raise ImportError("sentencepiece is required for streaming mode") from exc
     return spm.SentencePieceProcessor(model_file=path)
 
 
-def _load_stream(name: str, split: str, shuffle_buffer: int, seed: int, streaming: bool = True):
+def _load_stream(name: str, config: str, split: str, shuffle_buffer: int, seed: int):
     try:
         from datasets import load_dataset
     except ImportError as exc:
-        raise ImportError("datasets is required for SFT data") from exc
-    ds = load_dataset(name, split=split, streaming=streaming)
+        raise ImportError("datasets is required for streaming mode") from exc
+    ds = load_dataset(path=name, name=config, split=split, streaming=True)
     if shuffle_buffer > 0:
         ds = ds.shuffle(seed=seed, buffer_size=shuffle_buffer)
     return iter(ds)
 
 
-def _format_text(sample: dict, data_cfg: DictConfig) -> str:
-    template = data_cfg.get("template", None)
-    if template is not None:
-        instruction = sample.get("instruction", "")
-        output = sample.get("output", "")
-        inp = sample.get("input", "")
-        text = template.replace("{instruction}", instruction).replace("{output}", output)
-        text = text.replace("{input}", inp)
-        if not inp.strip():
-            text = "\n".join(
-                line for line in text.split("\n")
-                if "### Input:" not in line
-            )
-            while "\n\n\n" in text:
-                text = text.replace("\n\n\n", "\n\n")
-            text = text.strip()
-        return text
-    return sample.get(data_cfg.get("text_key", "text"), "")
+def _finalize_example(
+    ids: list[int], mask: list[int], eos_id: int, seq_len: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ids = ids + [eos_id]
+    mask = mask + [1]
+
+    pad_len = (seq_len + 1) - len(ids)
+    if pad_len > 0:
+        ids += [0] * pad_len
+        mask += [0] * pad_len
+
+    tokens = np.array(ids, dtype=np.int32)
+    m = np.array(mask, dtype=np.float32)
+
+    x = tokens[:-1]
+    y = tokens[1:]
+    loss_mask = m[1:]
+
+    return x, y, loss_mask
 
 
-def _count_prompt_tokens(text: str, marker: str, tokenizer) -> int:
-    marker_pos = text.rfind(marker)
-    if marker_pos == -1:
-        return 0
-    prompt_part = text[:marker_pos + len(marker)]
-    return len(tokenizer.encode(prompt_part, out_type=int))
+def _process_conversation(
+    conv: dict, tokenizer, eos_id: int, seq_len: int
+) -> Iterator[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    prompt_ids = tokenizer.encode("Instruction: " + conv["prompt"] + "\n\n", out_type=int)
+    if len(prompt_ids) >= seq_len + 1:
+        return
+
+    current_ids = list(prompt_ids)
+    current_mask = [0] * len(prompt_ids)
+
+    messages = conv["messages"]
+    for i in range(0, len(messages) - 1, 2):
+        user_msg = messages[i]["content"]
+        asst_msg = messages[i + 1]["content"]
+
+        user_prefix = "\nUser: " + user_msg + "\nAssistant: "
+        asst_part = asst_msg
+
+        user_prefix_ids = tokenizer.encode(user_prefix, out_type=int)
+        asst_ids = tokenizer.encode(asst_part, out_type=int)
+        turn_ids = user_prefix_ids + asst_ids
+
+        if len(current_ids) + len(turn_ids) + 1 > seq_len + 1:
+            if len(current_ids) > len(prompt_ids):
+                yield _finalize_example(current_ids, current_mask, eos_id, seq_len)
+            break
+
+        current_ids += turn_ids
+        current_mask += [0] * len(user_prefix_ids) + [1] * len(asst_ids)
+
+    if len(current_ids) > len(prompt_ids):
+        yield _finalize_example(current_ids, current_mask, eos_id, seq_len)
 
 
-def create_sft_data_iter(
+def create_data_iter(
     split: str,
     data_cfg: DictConfig,
     seq_len: int,
     global_batch_size: int,
     mesh: jax.sharding.Mesh,
-) -> Iterator[Tuple[Array, Array, Array, Array]]:
+) -> Iterator[Tuple[Array, Array, Array]]:
     n_procs = jax.process_count()
     proc_idx = jax.process_index()
     B_per_proc = global_batch_size // n_procs
@@ -78,80 +109,74 @@ def create_sft_data_iter(
     data_sharding = NamedSharding(mesh, P(("replica", "data"), None))
     shard_fn = get_data_shard_fn(mesh, data_sharding)
 
-    tokenizer_path = data_cfg.tokenizer_model
-    if not os.path.isabs(tokenizer_path):
-        tokenizer_path = to_absolute_path(tokenizer_path)
-    tokenizer = _load_tokenizer(tokenizer_path)
+    if data_cfg.get("use_local_shards", False):
+        pattern = (
+            data_cfg.local_train_pattern
+            if split == "train"
+            else data_cfg.local_eval_pattern
+        )
+        shard_dir = data_cfg.local_shard_dir
+        if not os.path.isabs(shard_dir):
+            shard_dir = to_absolute_path(shard_dir)
+        full_pattern = os.path.join(shard_dir, pattern)
+        shard_paths = sorted(glob_module.glob(full_pattern))
+        if not shard_paths:
+            raise FileNotFoundError(f"No shards found: {full_pattern}")
+        data = np.concatenate([np.load(p).ravel() for p in shard_paths], axis=0)
+        n_total = len(data)
+        per_proc = n_total // n_procs
+        data = data[proc_idx * per_proc : (proc_idx + 1) * per_proc]
 
-    eos_id = data_cfg.eos_id
-    response_marker = data_cfg.get("response_marker", "### Response:\n")
-    eval_percent = data_cfg.get("eval_percent", 5)
+        while True:
+            ix = np.random.randint(0, len(data) - seq_len - 1, size=(B_per_proc,))
+            x = np.take(data, np.arange(seq_len) + ix[:, None], axis=0).astype(np.int32)
+            y = np.take(data, np.arange(1, seq_len + 1) + ix[:, None], axis=0).astype(np.int32)
+            loss_mask = np.ones_like(y, dtype=np.float32)
+            yield shard_fn(x), shard_fn(y), shard_fn(loss_mask)
 
-    hf_name = data_cfg.hf_name
-    hf_split = data_cfg.train_split if split == "train" else data_cfg.eval_split
+    elif data_cfg.get("backend") == "hf_stream":
+        tokenizer_path = data_cfg.tokenizer_model
+        if not os.path.isabs(tokenizer_path):
+            tokenizer_path = to_absolute_path(tokenizer_path)
+        tokenizer = _load_tokenizer(tokenizer_path)
+        stream = _load_stream(
+            data_cfg.hf_name,
+            data_cfg.hf_config,
+            data_cfg.train_split if split == "train" else data_cfg.eval_split,
+            data_cfg.shuffle_buffer,
+            0,
+        )
+        eos_id = data_cfg.eos_id
 
-    if hf_split == data_cfg.eval_split and hf_split == data_cfg.train_split:
-        from datasets import load_dataset
-        dataset = load_dataset(hf_name, split=hf_split, streaming=False)
-        n_total = len(dataset)
-        n_eval = int(n_total * eval_percent / 100.0)
-        if split == "eval":
-            stream = iter(dataset.take(n_eval))
-        else:
-            train_ds = dataset.skip(n_eval)
-            if data_cfg.shuffle_buffer > 0:
-                train_ds = train_ds.shuffle(seed=0)
-            stream = iter(train_ds)
+        while True:
+            batch_x, batch_y, batch_mask = [], [], []
+
+            while len(batch_x) < B_per_proc:
+                try:
+                    sample = next(stream)
+                except StopIteration:
+                    stream = _load_stream(
+                        data_cfg.hf_name, data_cfg.hf_config,
+                        data_cfg.train_split if split == "train" else data_cfg.eval_split,
+                        data_cfg.shuffle_buffer, 0,
+                    )
+                    sample = next(stream)
+
+                for x, y, m in _process_conversation(sample, tokenizer, eos_id, seq_len):
+                    batch_x.append(x)
+                    batch_y.append(y)
+                    batch_mask.append(m)
+                    if len(batch_x) >= B_per_proc:
+                        break
+
+            x = np.stack(batch_x[:B_per_proc], axis=0)
+            y = np.stack(batch_y[:B_per_proc], axis=0)
+            loss_mask = np.stack(batch_mask[:B_per_proc], axis=0)
+
+            yield shard_fn(x), shard_fn(y), shard_fn(loss_mask)
+
     else:
-        shuffle = data_cfg.shuffle_buffer if split == "train" else 0
-        stream = _load_stream(hf_name, hf_split, shuffle, 0)
-
-    while True:
-        inp_ids = np.zeros((B_per_proc, seq_len), dtype=np.int32)
-        labels = np.zeros((B_per_proc, seq_len), dtype=np.int32)
-        attn_mask = np.zeros((B_per_proc, seq_len), dtype=np.int32)
-        loss_mask = np.zeros((B_per_proc, seq_len), dtype=np.int32)
-
-        for i in range(B_per_proc):
-            try:
-                sample = next(stream)
-            except StopIteration:
-                stream = _load_stream(hf_name, hf_split, data_cfg.shuffle_buffer, 0)
-                sample = next(stream)
-
-            text = _format_text(sample, data_cfg)
-            full_ids = tokenizer.encode(text, out_type=int) + [eos_id]
-            prompt_len = _count_prompt_tokens(text, response_marker, tokenizer)
-
-            N = len(full_ids)
-            if N > seq_len + 1:
-                excess = N - (seq_len + 1)
-                trim_prompt = min(excess, prompt_len)
-                full_ids = full_ids[trim_prompt:]
-                prompt_len -= trim_prompt
-                if len(full_ids) > seq_len + 1:
-                    full_ids = full_ids[:seq_len + 1]
-
-            N = len(full_ids)
-            prompt_len = min(prompt_len, max(0, N - 2))
-            n_prompt_targets = max(0, prompt_len - 1)
-
-            x = full_ids[:-1] if N > 1 else full_ids
-            y = full_ids[1:] if N > 1 else full_ids
-
-            x_arr = np.array(x + [0] * max(0, seq_len - len(x)), dtype=np.int32)[:seq_len]
-            y_arr = np.array(y + [0] * max(0, seq_len - len(y)), dtype=np.int32)[:seq_len]
-            attn_arr = np.array([1] * min(N - 1, seq_len) + [0] * max(0, seq_len - (N - 1)), dtype=np.int32)[:seq_len]
-            lm_arr = np.array(
-                [0] * min(n_prompt_targets, seq_len)
-                + [1] * min(N - 1 - n_prompt_targets, seq_len - n_prompt_targets)
-                + [0] * max(0, seq_len - (N - 1)),
-                dtype=np.int32,
-            )[:seq_len]
-
-            inp_ids[i] = x_arr
-            labels[i] = y_arr
-            attn_mask[i] = attn_arr
-            loss_mask[i] = lm_arr
-
-        yield shard_fn(inp_ids), shard_fn(labels), shard_fn(attn_mask), shard_fn(loss_mask)
+        raise NotImplementedError(
+            f"Unknown data backend: {data_cfg.get('backend')}. "
+            "Use 'hf_stream' or set use_local_shards=true"
+        )
