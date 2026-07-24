@@ -13,12 +13,8 @@ from omegaconf import DictConfig
 
 from dirt.train.sharding import get_data_shard_fn
 
-Array = jax.Array
 NamedSharding = jax.sharding.NamedSharding
 P = jax.sharding.PartitionSpec
-
-
-Array = jax.Array
 
 
 def _load_tokenizer(path: str):
@@ -101,7 +97,7 @@ def create_data_iter(
     seq_len: int,
     global_batch_size: int,
     mesh: jax.sharding.Mesh,
-) -> Iterator[Tuple[Array, Array, Array]]:
+) -> Iterator[Tuple[jax.Array, jax.Array, jax.Array]]:
     n_procs = jax.process_count()
     proc_idx = jax.process_index()
     B_per_proc = global_batch_size // n_procs
