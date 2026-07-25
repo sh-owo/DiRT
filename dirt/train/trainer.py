@@ -194,9 +194,9 @@ def run_training(cfg: DictConfig) -> None:
             logits = logits.astype(jnp.float32)
             loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
             per_block = {
-                f"block_{i}/{k}": jnp.mean(m[k])
+                f"block_{i}/{k}": jnp.mean(v)
                 for i, m in enumerate(all_metrics[:-1])
-                for k in ["delta_v", "imp_review", "gate", "review", "out"]
+                for k, v in m.items()
             }
             return loss, {**per_block, **all_metrics[-1]}
 
@@ -218,9 +218,9 @@ def run_training(cfg: DictConfig) -> None:
         logits = logits.astype(jnp.float32)
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
         per_block = {
-            f"block_{i}/{k}": jnp.mean(m[k])
+            f"block_{i}/{k}": jnp.mean(v)
             for i, m in enumerate(all_metrics[:-1])
-            for k in ["delta_v", "imp_review", "gate", "review", "out"]
+            for k, v in m.items()
         }
         return loss, {**per_block, **all_metrics[-1]}
 
