@@ -11,12 +11,16 @@ from dirt.inference.common import load_model
 from dirt.models.config import ModelConfig
 
 
+def _format_prompt(prompt: str) -> str:
+    return f"User: {prompt}\nAssistant: "
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-path", type=Path, required=True, help="Path to model config YAML")
     parser.add_argument("--model-path", type=Path, required=True, help="Path to model.safetensors")
     parser.add_argument("--tokenizer-path", type=Path, required=True, help="Path to SentencePiece tokenizer model")
-    parser.add_argument("--prompt", type=str, default="Brain-inspired language model is", help="Input prompt")
+    parser.add_argument("--prompt", type=str, default="Hello!", help="User message")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Maximum number of tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top-p", type=float, default=0.95, help="Top-p (nucleus) sampling parameter")
@@ -37,7 +41,7 @@ def main():
     infer_cfg = {
         "model_path": str(args.model_path),
         "tokenizer_model": str(args.tokenizer_path),
-        "prompt": args.prompt,
+        "prompt": _format_prompt(args.prompt),
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
         "top_p": args.top_p,
