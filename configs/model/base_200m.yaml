@@ -2,7 +2,7 @@ name: base_200m
 model_type: base
 vocab_size: 32128
 d_model: 1024
-n_blocks: 24
+n_blocks: 12
 n_heads: 16
 head_dim: 64
 d_ffn: 2816
