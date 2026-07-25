@@ -1,6 +1,6 @@
 global_batch_size: 128
 grad_accum_steps: 1
-target_train_tokens: 1000000000
+target_train_tokens: 80000000
 max_steps: null
 warmup_steps: 200
 lr_peak: 2.0e-5
