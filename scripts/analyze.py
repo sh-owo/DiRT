@@ -109,7 +109,7 @@ def main():
         log_probs = jnp.log(probs + 1e-8)
 
         entropy_local = -jnp.sum(probs * log_probs, axis=-1)
-        nll_local = -log_probs[jnp.arange(B_local)[:, None], jnp.arange(T)[None, :], input_sharded]
+        nll_local = -log_probs[jnp.arange(input_sharded.shape[0])[:, None], jnp.arange(T)[None, :], input_sharded]
 
         input_full = np.array(process_allgather(input_sharded))
         entropy_full = np.array(process_allgather(entropy_local))
