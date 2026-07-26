@@ -2,7 +2,7 @@ global_batch_size: 128
 grad_accum_steps: 1
 target_train_tokens: 80000000
 max_steps: null
-warmup_steps: 200
+warmup_steps: 20
 lr_peak: 2.0e-5
 lr_end: 1.0e-6
 adam_beta1: 0.9
@@ -10,10 +10,10 @@ adam_beta2: 0.95
 adam_eps: 1.0e-8
 weight_decay: 0.01
 grad_clip: 1.0
-log_every: 20
-eval_every: 200
+log_every: 5
+eval_every: 50
 eval_batches: 32
-save_every: 500
+save_every: 50
 checkpoint_dir: checkpoints/dirt_sft
 keep_checkpoints: 5
 pretrained_path: null
