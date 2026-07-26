@@ -38,8 +38,11 @@ class DiRTModel(nn.Module):
         sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
         all_metrics = []
+        z_prev = x
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos)
+            z_L = x
+            x, metrics = block(z_L, z_prev, positions, sincos)
+            z_prev = z_L
             all_metrics.append(metrics)
 
         x = self.final_norm(x)

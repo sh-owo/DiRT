@@ -36,19 +36,27 @@ class ReviewBlock(nn.Module):
 
         self.magnitude_linear = nn.Dense(1, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "magnitude_linear")
         self.mag_scale = self.param("mag_scale", nn.initializers.ones, (1,), self.dtype)
+        self.conflict_scale = self.param("conflict_scale", nn.initializers.zeros, (1,), self.dtype)
 
 
     def __call__(
         self,
         z_L: jnp.ndarray,
         new: jnp.ndarray,
+        prev_z_L: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
 
         delta_v =  new - z_L
+        prev_direction = z_L - prev_z_L
+        cos_sim = jnp.sum(delta_v * prev_direction, axis=-1, keepdims=True) / (
+            jnp.linalg.norm(delta_v, axis=-1, keepdims=True)
+            * jnp.linalg.norm(prev_direction, axis=-1, keepdims=True) + 1e-6
+        )
+        conflict = -cos_sim
 
         z_L_norm = self.norm_z_L(z_L)
         delta_v_norm = self.norm_attn(delta_v)
@@ -70,7 +78,7 @@ class ReviewBlock(nn.Module):
         _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
 
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
-        magnitude = nn.sigmoid(self.magnitude_linear(_delta_v))
+        magnitude = nn.sigmoid(self.magnitude_linear(_delta_v) + self.conflict_scale * conflict)
         scaled_magnitude = self.mag_scale * magnitude
 
         review = direction * scaled_magnitude
@@ -84,5 +92,17 @@ class ReviewBlock(nn.Module):
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
         out_l2 = jnp.linalg.norm(out, axis=-1)
+        conflict_mean = jnp.mean(conflict, axis=-1)
+        scaled_conflict_mean = jnp.mean(self.conflict_scale * conflict, axis=-1)
 
-        return out, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2
+        metrics = {
+            "delta_v": delta_v_l2,
+            "imp_review": imp_review_l2,
+            "magnitude_mean": magnitude_mean,
+            "scaled_magnitude_mean": scaled_magnitude_mean,
+            "review": review_l2,
+            "out": out_l2,
+            "conflict": conflict_mean,
+            "scaled_conflict_mean": scaled_conflict_mean,
+        }
+        return out, metrics
