@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import yaml
 from scipy.stats import spearmanr
+from jax.experimental.multihost_utils import process_allgather
 
 from dirt.inference.generate import _load_tokenizer
 from dirt.models.config import ModelConfig, dtype_from_name
@@ -45,10 +46,6 @@ def main():
     devices = jax.devices()
     n_devices = len(devices)
     mesh = create_mesh((1, n_devices), ("replica", "data"))
-    data_sharding = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec(("replica", "data"), None)
-    )
-    shard_fn = get_data_shard_fn(mesh, data_sharding)
 
     params = load_safetensors_checkpoint(str(args.model_path), model_cfg, mesh)
     model = DiRTModel(cfg=model_cfg)
@@ -63,9 +60,10 @@ def main():
     ds = load_dataset("HuggingFaceH4/ultrachat_200k", split="test_sft", streaming=True)
     ds_iter = iter(ds)
 
-    batch_size = args.batch_size
-    B_per_proc = batch_size // jax.process_count()
-    max_positions = args.n_batches * batch_size * seq_len
+    n_procs = jax.process_count()
+    proc_idx = jax.process_index()
+    B_per_proc = args.batch_size // n_procs
+    max_positions = args.n_batches * args.batch_size * seq_len
 
     gate_all = np.zeros((n_layers, max_positions), dtype=np.float32)
     ent_all = np.zeros(max_positions, dtype=np.float32)
@@ -74,9 +72,14 @@ def main():
     raw_input_ids = {}
     total = 0
 
+    data_sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec(("replica", "data"), None)
+    )
+    shard_fn = get_data_shard_fn(mesh, data_sharding)
+
     for batch_id in range(args.n_batches):
         input_ids_list = []
-        for _ in range(batch_size):
+        for _ in range(B_per_proc):
             try:
                 sample = next(ds_iter)
             except StopIteration:
@@ -92,39 +95,45 @@ def main():
 
         if not input_ids_list:
             break
+
         input_ids = np.array(input_ids_list, dtype=np.int32)
-        raw_input_ids[batch_id] = input_ids.copy()
-        B, T = input_ids.shape
+        B_local, T = input_ids.shape
 
         input_sharded = shard_fn(input_ids)
         logits, all_metrics = model.apply(
             {"params": params}, input_sharded, train=False,
         )
 
-        logits_np = np.array(jax.device_get(logits.astype(jnp.float32)))
-        B_actual, T_actual = logits_np.shape[:2]
+        logits_float = logits.astype(jnp.float32)
+        probs = jax.nn.softmax(logits_float, axis=-1)
+        log_probs = jnp.log(probs + 1e-8)
 
-        probs = jax.nn.softmax(jnp.array(logits_np), axis=-1)
-        probs_np = np.array(probs)
-        log_probs_np = np.log(probs_np + 1e-8)
-        entropy = -np.sum(probs_np * log_probs_np, axis=-1)
-        nll = -log_probs_np[np.arange(B_actual)[:, None], np.arange(T_actual)[None, :], input_ids[:B_actual]]
+        entropy_local = -jnp.sum(probs * log_probs, axis=-1)
+        nll_local = -log_probs[jnp.arange(B_local)[:, None], jnp.arange(T)[None, :], input_sharded]
 
-        for L in range(n_layers):
-            metrics = all_metrics[L]
-            gate_val = jax.device_get(metrics["magnitude_mean"])
-            gate_all[L, total:total + B_actual * T_actual] = np.array(gate_val).ravel()
+        input_full = np.array(process_allgather(input_sharded))
+        entropy_full = np.array(process_allgather(entropy_local))
+        nll_full = np.array(process_allgather(nll_local))
 
-        ent_all[total:total + B_actual * T_actual] = entropy.ravel()
-        nll_all[total:total + B_actual * T_actual] = nll.ravel()
-        pos_ids[total:total + B_actual * T_actual] = np.column_stack([
-            np.full(B_actual * T_actual, batch_id, dtype=np.int32),
-            np.repeat(np.arange(B_actual, dtype=np.int32), T_actual),
-            np.tile(np.arange(T_actual, dtype=np.int32), B_actual),
-        ])
-        total += B_actual * T_actual
+        B_full, T = input_full.shape
 
         if is_main:
+            raw_input_ids[batch_id] = input_full
+
+        for L in range(n_layers):
+            gate_full = np.array(process_allgather(all_metrics[L]["magnitude_mean"]))
+            if is_main:
+                gate_all[L, total:total + B_full * T] = gate_full.ravel()
+
+        if is_main:
+            ent_all[total:total + B_full * T] = entropy_full.ravel()
+            nll_all[total:total + B_full * T] = nll_full.ravel()
+            pos_ids[total:total + B_full * T] = np.column_stack([
+                np.full(B_full * T, batch_id, dtype=np.int32),
+                np.repeat(np.arange(B_full, dtype=np.int32), T),
+                np.tile(np.arange(T, dtype=np.int32), B_full),
+            ])
+            total += B_full * T
             print(f"  batch {batch_id + 1}/{args.n_batches} — {total:,} positions")
 
     gate_all = gate_all[:, :total]
