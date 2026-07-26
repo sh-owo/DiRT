@@ -35,7 +35,6 @@ class ReviewBlock(nn.Module):
         self.down_proj = nn.Dense(self.cfg.d_model, use_bias=False, kernel_init= out_init(self.cfg.n_blocks), dtype=self.dtype, name= "down_proj") 
 
         self.magnitude_linear = nn.Dense(1, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "magnitude_linear")
-        self.mag_scale = self.param("mag_scale", nn.initializers.ones, (1,), self.dtype)
 
 
     def __call__(
@@ -44,7 +43,7 @@ class ReviewBlock(nn.Module):
         new: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
 
@@ -70,19 +69,17 @@ class ReviewBlock(nn.Module):
         _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
 
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
-        magnitude = nn.sigmoid(self.magnitude_linear(_delta_v))
-        scaled_magnitude = self.mag_scale * magnitude
+        magnitude = self.magnitude_linear(_delta_v)
 
-        review = direction * scaled_magnitude
+        review = direction * magnitude
 
         out = z_L + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
         magnitude_mean = jnp.mean(magnitude, axis=-1)
-        scaled_magnitude_mean = jnp.mean(scaled_magnitude, axis=-1)
         imp_review_l2 = jnp.linalg.norm(_review, axis=-1)
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
         out_l2 = jnp.linalg.norm(out, axis=-1)
 
-        return out, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2
+        return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2
