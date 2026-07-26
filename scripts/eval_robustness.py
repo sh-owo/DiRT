@@ -247,7 +247,7 @@ def main():
     # ============================================================
     if args.model_type == "dirt" and args.ablate:
         print("\n" + "=" * 60)
-        print("  [검증 3] Gate Ablation (gate=0)")
+        print("  [검증 3] Ablation — propose only (skip review)")
         print("=" * 60)
         ablated = eval_robustness(
             model, params, make_gen, shard_fn, eval_fn,
@@ -256,7 +256,7 @@ def main():
         )
 
         if is_main:
-            print("\n  Normal vs Ablated (gate=0):")
+            print("\n  Normal vs Ablated (propose-only):")
             print("  p    | normal_ppl  ablated_ppl  gap_ppl   normal_acc  ablated_acc  gap_acc")
             for p in args.corrupt_probs:
                 if p in results and p in ablated:
