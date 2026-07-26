@@ -56,7 +56,7 @@ class ReviewBlock(nn.Module):
             jnp.linalg.norm(delta_v, axis=-1, keepdims=True)
             * jnp.linalg.norm(prev_direction, axis=-1, keepdims=True) + 1e-6
         )
-        conflict = -cos_sim
+        conflict = -jax.lax.stop_gradient(cos_sim)
 
         z_L_norm = self.norm_z_L(z_L)
         delta_v_norm = self.norm_attn(delta_v)
