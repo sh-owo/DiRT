@@ -38,8 +38,9 @@ class DiRTModel(nn.Module):
         sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
         all_metrics = []
+        embedding = self.token_embedding.embedding
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos)
+            x, metrics = block(x, embedding, positions, sincos)
             all_metrics.append(metrics)
 
         x = self.final_norm(x)

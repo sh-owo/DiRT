@@ -36,21 +36,28 @@ class ReviewBlock(nn.Module):
 
         self.magnitude_linear = nn.Dense(1, use_bias=False, kernel_init= default_init(), dtype=self.dtype, name= "magnitude_linear")
         self.mag_scale = self.param("mag_scale", nn.initializers.ones, (1,), self.dtype)
+        self.uncertainty_scale = self.param("unc_scale", nn.initializers.constant(1.0), (1,), self.dtype)
 
 
     def __call__(
         self,
         z_L: jnp.ndarray,
         new: jnp.ndarray,
+        embedding: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
 
         delta_v =  new - z_L
 
         z_L_norm = self.norm_z_L(z_L)
+        mid_logits = z_L_norm @ embedding.T
+        probs = jax.nn.softmax(mid_logits)
+        entropy = -jnp.sum(probs * jnp.log(probs + 1e-8), axis=-1, keepdims=True)
+        uncertainty = entropy / jnp.log(self.cfg.vocab_size)
+        uncertainty = jax.lax.stop_gradient(uncertainty)
         delta_v_norm = self.norm_attn(delta_v)
         q = self.q_proj(delta_v_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
         k = self.k_proj(z_L_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
@@ -70,7 +77,7 @@ class ReviewBlock(nn.Module):
         _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
 
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
-        magnitude = nn.sigmoid(self.magnitude_linear(_delta_v))
+        magnitude = nn.sigmoid(self.magnitude_linear(_delta_v) + self.uncertainty_scale * uncertainty)
         scaled_magnitude = self.mag_scale * magnitude
 
         review = direction * scaled_magnitude
@@ -84,5 +91,7 @@ class ReviewBlock(nn.Module):
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
         out_l2 = jnp.linalg.norm(out, axis=-1)
+        uncertainty_mean = jnp.mean(uncertainty, axis=-1)
+        scaled_uncertainty_mean = jnp.mean(self.uncertainty_scale * uncertainty, axis=-1)
 
-        return out, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2
+        return out, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2, uncertainty_mean, scaled_uncertainty_mean

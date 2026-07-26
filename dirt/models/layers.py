@@ -17,11 +17,12 @@ class DirtLayer(nn.Module):
     def __call__(
         self,
         z_L: jnp.ndarray,
+        embedding: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
     ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         new = self.propose_block(z_L, positions, sincos)
-        z_L, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2 = self.review_block(z_L, new, positions, sincos)
+        z_L, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2, uncertainty_mean, scaled_uncertainty_mean = self.review_block(z_L, new, embedding, positions, sincos)
         metrics = {
             "delta_v": delta_v_l2,
             "imp_review": imp_review_l2,
@@ -29,5 +30,7 @@ class DirtLayer(nn.Module):
             "scaled_magnitude_mean": scaled_magnitude_mean,
             "review": review_l2,
             "out": out_l2,
+            "uncertainty": uncertainty_mean,
+            "scaled_uncertainty": scaled_uncertainty_mean,
         }
         return z_L, metrics
