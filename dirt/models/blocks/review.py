@@ -73,12 +73,15 @@ class ReviewBlock(nn.Module):
 
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
         magnitude = nn.sigmoid(self.magnitude_linear(_delta_v))
-        magnitude = jnp.where(force_gate_zero, jnp.zeros_like(magnitude), magnitude)
-        scaled_magnitude = self.mag_scale * magnitude
 
-        review = direction * scaled_magnitude
-
-        out = z_L + review
+        if force_gate_zero:
+            out = new
+            scaled_magnitude = jnp.zeros_like(magnitude)
+            review = jnp.zeros_like(z_L)
+        else:
+            scaled_magnitude = self.mag_scale * magnitude
+            review = direction * scaled_magnitude
+            out = z_L + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
         magnitude_mean = jnp.mean(magnitude, axis=-1)

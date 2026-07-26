@@ -61,7 +61,7 @@ def create_data_gen(data_path, data_name, data_split, tokenizer, seq_len, eos_id
             yield chunk.reshape(B_local, seq_len + 1)
 
 
-def eval_robustness(model, params, make_gen, shard_fn, eval_fn, probs, vocab_size, base_rng, is_main, n_batches, *, force_gate_zero=False):
+def eval_robustness(model, params, make_gen, shard_fn, eval_fn, probs, vocab_size, base_rng, is_main, n_batches, *,         force_gate_zero=False):
     results = {}
     for p in probs:
         acc_corrupt_sum, acc_clean_sum = 0.0, 0.0
