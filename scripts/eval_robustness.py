@@ -124,7 +124,7 @@ def eval_gate_on_errors(model, params, make_gen, shard_fn, eval_fn, vocab_size, 
         corrupted_sharded = shard_fn(corrupted)
         logits_f32, all_metrics = eval_fn(params, corrupted_sharded, False)
 
-        mask_host = np.array(process_allgather(mask))
+        mask_host = np.array(process_allgather(shard_fn(mask)))
 
         if all_metrics:
             layer_gates = [
