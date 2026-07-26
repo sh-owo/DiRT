@@ -77,11 +77,12 @@ def eval_robustness(model, params, make_gen, shard_fn, eval_fn, probs, vocab_siz
             corrupted, mask = corrupt(clean, p, vocab_size, rng)
 
             corrupted_sharded = shard_fn(corrupted)
+            clean_sharded = shard_fn(clean)
             logits_f32, _ = eval_fn(params, corrupted_sharded, force_gate_zero)
 
             pred = jnp.argmax(logits_f32[:, :-1], axis=-1)
-            target = clean[:, 1:]
-            mask_in = mask[:, :-1]
+            target = clean_sharded[:, 1:]
+            mask_in = shard_fn(mask)[:, :-1]
             loss = optax.softmax_cross_entropy_with_integer_labels(logits_f32[:, :-1], target)
 
             pred_host = np.array(process_allgather(pred))
