@@ -19,9 +19,11 @@ class DirtLayer(nn.Module):
         z_L: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
+        *,
+        force_gate_zero: bool = False,
     ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         new = self.propose_block(z_L, positions, sincos)
-        z_L, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2 = self.review_block(z_L, new, positions, sincos)
+        z_L, delta_v_l2, imp_review_l2, magnitude_mean, scaled_magnitude_mean, review_l2, out_l2 = self.review_block(z_L, new, positions, sincos, force_gate_zero=force_gate_zero)
         metrics = {
             "delta_v": delta_v_l2,
             "imp_review": imp_review_l2,

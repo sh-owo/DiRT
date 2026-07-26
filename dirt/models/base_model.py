@@ -1,15 +1,31 @@
-from typing import Optional
+from __future__ import annotations
 
-import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
 from dirt.models.config import ModelConfig, dtype_from_name
-from dirt.models.layers import DirtLayer
 from dirt.models.common import RMSNorm, rope_tables
+from dirt.models.blocks.propose import ProposeBlock
 
 
-class DiRTModel(nn.Module):
+class BaseLayer(nn.Module):
+    cfg: ModelConfig
+    dtype: jnp.dtype
+
+    def setup(self) -> None:
+        self.propose_block = ProposeBlock(cfg=self.cfg, dtype=self.dtype)
+
+    def __call__(
+        self,
+        z_L: jnp.ndarray,
+        positions: jnp.ndarray,
+        sincos: tuple[jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+        out = self.propose_block(z_L, positions, sincos)
+        return out, {}
+
+
+class BaseModel(nn.Module):
     cfg: ModelConfig
 
     def setup(self) -> None:
@@ -21,19 +37,12 @@ class DiRTModel(nn.Module):
             dtype=self.dtype,
         )
         self.blocks = [
-            nn.remat(DirtLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
+            nn.remat(BaseLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
             for i in range(self.cfg.n_blocks)
         ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
 
-    def __call__(
-        self,
-        input_ids: jnp.ndarray,
-        train: bool,
-        attention_mask: Optional[jnp.ndarray] = None,
-        *,
-        force_gate_zero: bool = False,
-    ) -> tuple[jnp.ndarray, list[dict[str, jnp.ndarray]]]:
+    def __call__(self, input_ids: jnp.ndarray, train: bool, **kwargs) -> tuple[jnp.ndarray, list[dict[str, jnp.ndarray]]]:
         batch, seq_len = input_ids.shape
         x = self.token_embedding(input_ids).astype(self.dtype)
         positions = jnp.arange(seq_len, dtype=jnp.int32)
@@ -41,18 +50,13 @@ class DiRTModel(nn.Module):
 
         all_metrics = []
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos, force_gate_zero=force_gate_zero)
+            x, metrics = block(x, positions, sincos)
             all_metrics.append(metrics)
 
         x = self.final_norm(x)
         embedding = self.token_embedding.embedding
         logits = jnp.einsum("bld,vd->blv", x.astype(jnp.float32), embedding.astype(jnp.float32))
 
-        aggregate = self._aggregate_metrics(all_metrics)
-        all_metrics.append(aggregate)
+        all_metrics.append({})
 
         return logits, all_metrics
-
-    def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
-        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in all_metrics[0].keys()}
-        return {f"avg_{k}": jnp.mean(v) for k, v in stacked.items()}

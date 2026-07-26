@@ -44,6 +44,8 @@ class ReviewBlock(nn.Module):
         new: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
+        *,
+        force_gate_zero: bool = False,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
@@ -71,6 +73,8 @@ class ReviewBlock(nn.Module):
 
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
         magnitude = nn.sigmoid(self.magnitude_linear(_delta_v))
+        if force_gate_zero:
+            magnitude = jnp.zeros_like(magnitude)
         scaled_magnitude = self.mag_scale * magnitude
 
         review = direction * scaled_magnitude
