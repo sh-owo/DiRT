@@ -180,7 +180,11 @@ def main():
                               n_layers_dirt=data.n_layers_dirt,
                               n_layers_base=data.n_layers_base,
                               output_dir=seed_output, seed=seed,
-                              delta_v=data.delta_v, review=data.review)
+                              delta_v=data.delta_v, review=data.review,
+                              sentence_hidden_dirt=data.sentence_hidden_dirt,
+                              sentence_hidden_base=data.sentence_hidden_base,
+                              sentence_texts=data.sentence_texts,
+                              tokenizer=tokenizer)
 
             result = mod.run(**kwargs)
             all_results[(seed, test_name)] = result

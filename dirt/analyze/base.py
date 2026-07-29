@@ -263,6 +263,9 @@ def collect_analysis_data(
 
     total = 0
     total_subsample = 0
+    sentence_hidden_dirt_arr = None
+    sentence_hidden_base_arr = None
+    sentence_texts_arr = None
 
     data_sharding = create_data_sharding(mesh)
     shard_fn = get_data_shard_fn(mesh, data_sharding)
@@ -348,6 +351,15 @@ def collect_analysis_data(
             for L in range(n_layers_base + 1):
                 hidden_base_list[L].append(hb_gathered[L][batch_indices])
 
+            if batch_id == 0:
+                sentence_hidden_dirt_arr = [hd_gathered[L][:3] for L in range(n_layers_dirt + 1)]
+                sentence_hidden_base_arr = [hb_gathered[L][:3] for L in range(n_layers_base + 1)]
+                sentence_texts_arr = []
+                for idx in range(3):
+                    ids = input_full[idx]
+                    text = tokenizer.decode(ids[ids != int(pad_id)].tolist())
+                    sentence_texts_arr.append(text)
+
             total_subsample += len(batch_indices)
             total += n_new
             print(f"  batch {batch_id + 1}/{n_batches} — {total:,} pos, {total_subsample:,} subsampled")
@@ -391,6 +403,9 @@ def collect_analysis_data(
         direction=direction,
         hidden_dirt=hidden_dirt,
         hidden_base=hidden_base,
+        sentence_hidden_dirt=sentence_hidden_dirt_arr,
+        sentence_hidden_base=sentence_hidden_base_arr,
+        sentence_texts=sentence_texts_arr,
         n_tokens=total,
         n_subsample=total_subsample,
         n_layers_dirt=n_layers_dirt,
