@@ -42,7 +42,7 @@ class BaseModel(nn.Module):
             dtype=self.dtype,
         )
         self.blocks = [
-            nn.remat(BaseLayer, static_argnames=("analysis_mode",))(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
+            nn.remat(BaseLayer, static_argnums=(3,))(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
             for i in range(self.cfg.n_blocks)
         ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
