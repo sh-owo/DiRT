@@ -425,7 +425,10 @@ def save_csv(results: dict, path: Path):
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["test", "seed", "metric", "value"])
-        for (seed, test_name), metrics in sorted(results.items()):
+        def _sort_key(item):
+            k = item[0]
+            return (str(k[0]), str(k[1]))
+        for (seed, test_name), metrics in sorted(results.items(), key=_sort_key):
             for metric_name, value in metrics.items():
                 if isinstance(value, (int, float, np.integer, np.floating)):
                     writer.writerow([test_name, str(seed), metric_name, float(value)])

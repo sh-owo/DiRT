@@ -18,6 +18,10 @@ def run(
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    position = pos_ids[:, 2]
+    bands = [(0, 1), (1, 10), (10, 50), (50, position.max() + 1)]
+    band_labels = ["pos=0", "pos1-10", "pos10-50", "pos50+"]
+
     results = {}
     for L in range(n_layers):
         mag = magnitudes[L]
@@ -25,9 +29,30 @@ def run(
         valid = mag > -1e10
         if np.sum(valid) < 10:
             continue
-        rho, p = spearmanr(mag[valid], loss[valid])
-        results[f"spearman_L{L}"] = float(rho)
-        results[f"spearman_p_L{L}"] = float(p)
+
+        rho_all, p_all = spearmanr(mag[valid], loss[valid])
+        results[f"spearman_L{L}"] = float(rho_all)
+        results[f"spearman_p_L{L}"] = float(p_all)
+
+        mask_clean = valid & (position > 0)
+        c = int(np.sum(mask_clean))
+        if c > 10:
+            rho_clean, p_clean = spearmanr(mag[mask_clean], loss[mask_clean])
+            results[f"spearman_clean_L{L}"] = float(rho_clean)
+            results[f"spearman_clean_p_L{L}"] = float(p_clean)
+        else:
+            results[f"spearman_clean_L{L}"] = 0.0
+            results[f"spearman_clean_p_L{L}"] = 1.0
+
+        for bi, (lo, hi) in enumerate(bands):
+            mask_band = valid & (position >= lo) & (position < hi)
+            cb = int(np.sum(mask_band))
+            if cb > 10:
+                rho_b, p_b = spearmanr(mag[mask_band], loss[mask_band])
+            else:
+                rho_b, p_b = 0.0, 1.0
+            results[f"strat_rho_L{L}_{band_labels[bi]}"] = float(rho_b)
+            results[f"strat_p_L{L}_{band_labels[bi]}"] = float(p_b)
 
         try:
             import matplotlib
@@ -39,7 +64,7 @@ def run(
             ax.scatter(loss[valid], mag[valid], alpha=0.3, s=s, c="steelblue")
             ax.set_xlabel("Token NLL")
             ax.set_ylabel("|magnitude|")
-            ax.set_title(f"L{L}: magnitude vs NLL (ρ={rho:.4f}, seed {seed})")
+            ax.set_title(f"L{L}: ρ_all={rho_all:.4f} ρ_clean={results[f'spearman_clean_L{L}']:.4f} (seed {seed})")
             ax.grid(True, alpha=0.3)
             plt.tight_layout()
             fig.savefig(output_dir / f"2b_magnitude_vs_loss_L{L}.png", dpi=150)
@@ -49,34 +74,68 @@ def run(
             pass
 
         n_top = 20
-        top_idx = np.argsort(mag)[-n_top:]
-        bot_idx = np.argsort(mag)[:n_top]
+        pos0 = position == 0
+        mask_pos = valid & (position > 0)
 
         ctx_path = output_dir / f"2b_top_bottom_L{L}_seed{seed}.txt"
         with open(ctx_path, "w") as f:
-            f.write(f"=== Layer {L} |magnitude| 상위 {n_top} ===\n")
-            for idx in reversed(top_idx):
-                b_id, b, t = pos_ids[idx]
-                ids = token_ids.get(b_id, np.array([[0]]))
-                if b < ids.shape[0] and t < ids.shape[1]:
-                    tok_id = int(ids[b, t])
-                    tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
-                    f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | pos={b_id}:{b}:{t} → {tok_str}\n")
+            f.write(f"=== Layer {L} — position=0 only ===\n")
+            mag_pos0 = mag[pos0]
+            if len(mag_pos0) > 0:
+                top0 = np.argsort(mag_pos0)[-min(n_top, len(mag_pos0)):]
+                for idx in np.array(np.where(pos0)[0])[top0]:
+                    b_id, b, t = pos_ids[idx]
+                    ids_arr = token_ids.get(b_id, np.array([[0]]))
+                    if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
+                        tok_id = int(ids_arr[b, t])
+                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
+                        f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | {tok_str}\n")
 
-            f.write(f"\n=== Layer {L} |magnitude| 하위 {n_top} ===\n")
-            for idx in bot_idx:
-                b_id, b, t = pos_ids[idx]
-                ids = token_ids.get(b_id, np.array([[0]]))
-                if b < ids.shape[0] and t < ids.shape[1]:
-                    tok_id = int(ids[b, t])
-                    tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
-                    f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | pos={b_id}:{b}:{t} → {tok_str}\n")
+            f.write(f"\n=== Layer {L} — position>0, dedup by token ===\n")
+            idx_pos = np.where(mask_pos)[0]
+            if len(idx_pos) > 0:
+                mag_pos = mag[idx_pos]
+                seen_tokens = {}
+                for idx in idx_pos[np.argsort(mag_pos)[-n_top * 5:]]:
+                    b_id, b, t = pos_ids[idx]
+                    ids_arr = token_ids.get(b_id, np.array([[0]]))
+                    if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
+                        tok_id = int(ids_arr[b, t])
+                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
+                        if tok_str not in seen_tokens or mag[idx] > seen_tokens[tok_str][0]:
+                            seen_tokens[tok_str] = (mag[idx], loss[idx], pos_ids[idx])
+                sorted_tokens = sorted(seen_tokens.items(), key=lambda x: -x[1][0])[:n_top]
+                for tok_str, (m_val, l_val, _) in sorted_tokens:
+                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | {tok_str}\n")
+
+            f.write(f"\n=== Layer {L} — |magnitude| 하위 {n_top} (position>0) ===\n")
+            if len(idx_pos) > 0:
+                mag_pos = mag[idx_pos]
+                seen_low = {}
+                for idx in idx_pos[np.argsort(mag_pos)[:n_top * 5]]:
+                    b_id, b, t = pos_ids[idx]
+                    ids_arr = token_ids.get(b_id, np.array([[0]]))
+                    if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
+                        tok_id = int(ids_arr[b, t])
+                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
+                        if tok_str not in seen_low or mag[idx] < seen_low[tok_str][0]:
+                            seen_low[tok_str] = (mag[idx], loss[idx], pos_ids[idx])
+                sorted_low = sorted(seen_low.items(), key=lambda x: x[1][0])[:n_top]
+                for tok_str, (m_val, l_val, _) in sorted_low:
+                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | {tok_str}\n")
 
     print(f"\n=== magnitude_difficulty (seed {seed}) ===")
     for L in range(n_layers):
         k = f"spearman_L{L}"
         if k in results:
-            print(f"  L{L}: ρ={results[k]:.4f} (p={results.get(f'spearman_p_L{L}', 1):.4e})")
-    print(f"  상하위 토큰: {output_dir / f'2b_top_bottom_L*_seed{seed}.txt'}")
+            clean = results.get(f"spearman_clean_L{L}", 0)
+            print(f"  L{L}: ρ_all={results[k]:+.4f}  ρ_pos>0={clean:+.4f}")
+    print(f"\n  Stratified by position:")
+    for L in range(n_layers):
+        parts = [f"  L{L}:"]
+        for bl in band_labels:
+            v = results.get(f"strat_rho_L{L}_{bl}", 0)
+            parts.append(f"{bl}={v:+.4f}")
+        print(" ".join(parts))
 
     return results

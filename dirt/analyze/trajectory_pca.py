@@ -60,6 +60,10 @@ def run(
     mean_all = np.mean(all_stacked, axis=0, keepdims=True)
     centered_all = all_stacked - mean_all
     U, S, Vt = np.linalg.svd(centered_all, full_matrices=False)
+    ev_ratio = S**2 / np.sum(S**2)
+    print(f"  Explained variance: PC1={ev_ratio[0]:.1%} PC2={ev_ratio[1]:.1%} PC3={ev_ratio[2]:.1%} "
+          f"PC4={ev_ratio[3]:.1%} PC5={ev_ratio[4]:.1%}  "
+          f"PC1~PC3={np.sum(ev_ratio[:3]):.1%}")
     pca_5d = centered_all @ Vt[:5].T
 
     base_flat = pca_5d[:n_base_pts * B].reshape(B, n_base_pts, 5)
@@ -74,6 +78,12 @@ def run(
         "traj_len_base": traj_len_base,
         "traj_len_dirt": traj_len_dirt,
         "n_subsample_tokens": n_subsample,
+        "ev_pc1": float(ev_ratio[0]),
+        "ev_pc2": float(ev_ratio[1]),
+        "ev_pc3": float(ev_ratio[2]),
+        "ev_pc4": float(ev_ratio[3]),
+        "ev_pc5": float(ev_ratio[4]),
+        "ev_pc1_3": float(np.sum(ev_ratio[:3])),
     }
 
     dv_norms = [float(np.mean(np.linalg.norm(delta_v[L], axis=-1))) for L in range(n_layers_dirt)]
