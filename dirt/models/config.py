@@ -15,6 +15,7 @@ class ModelConfig:
     rms_norm_eps: float
     attn_dropout: float
     dtype: str
+    model_type: str = "dirt"
 
 def dtype_from_name(name: str) -> jnp.dtype:
     if name == "float32":
@@ -25,5 +26,3 @@ def dtype_from_name(name: str) -> jnp.dtype:
         return jnp.bfloat16
     else:
         raise ValueError(f"Unsupported dtype: {name}")
-    
-    

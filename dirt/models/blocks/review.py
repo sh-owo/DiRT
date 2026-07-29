@@ -43,6 +43,7 @@ class ReviewBlock(nn.Module):
         new: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
+        analysis_mode: bool = False,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
@@ -73,7 +74,7 @@ class ReviewBlock(nn.Module):
 
         review = direction * magnitude
 
-        out = z_L + review
+        out = new + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
         magnitude_mean = jnp.mean(magnitude, axis=-1)
@@ -81,5 +82,9 @@ class ReviewBlock(nn.Module):
         review_l2 = jnp.linalg.norm(review, axis=-1)
 
         out_l2 = jnp.linalg.norm(out, axis=-1)
+
+        if analysis_mode:
+            return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2, \
+                   delta_v, _review, direction, magnitude, review
 
         return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2

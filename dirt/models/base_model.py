@@ -1,15 +1,36 @@
 from typing import Optional
 
-import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
 from dirt.models.config import ModelConfig, dtype_from_name
-from dirt.models.layers import DirtLayer
+from dirt.models.blocks.propose import ProposeBlock
 from dirt.models.common import RMSNorm, rope_tables
 
 
-class DiRTModel(nn.Module):
+class BaseLayer(nn.Module):
+    cfg: ModelConfig
+    dtype: jnp.dtype
+
+    def setup(self) -> None:
+        self.propose_block = ProposeBlock(cfg=self.cfg, dtype=self.dtype)
+
+    def __call__(
+        self,
+        z_L: jnp.ndarray,
+        positions: jnp.ndarray,
+        sincos: tuple[jnp.ndarray, jnp.ndarray],
+        analysis_mode: bool = False,
+    ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+        out = self.propose_block(z_L, positions, sincos)
+        metrics = {}
+        if analysis_mode:
+            metrics["z_L_raw"] = z_L
+            metrics["out_raw"] = out
+        return out, metrics
+
+
+class BaseModel(nn.Module):
     cfg: ModelConfig
 
     def setup(self) -> None:
@@ -21,7 +42,7 @@ class DiRTModel(nn.Module):
             dtype=self.dtype,
         )
         self.blocks = [
-            nn.remat(DirtLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
+            nn.remat(BaseLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
             for i in range(self.cfg.n_blocks)
         ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
@@ -38,30 +59,22 @@ class DiRTModel(nn.Module):
         positions = jnp.arange(seq_len, dtype=jnp.int32)
         sincos = rope_tables(self.cfg.max_seq_len, self.cfg.head_dim, self.cfg.rope_base, self.dtype)
 
-        all_metrics = []
-        hidden_states = [x]
+        all_metrics: list[dict] = []
+        all_hidden: list[jnp.ndarray] = [x]
         for block in self.blocks:
             x, metrics = block(x, positions, sincos, analysis_mode=analysis_mode)
             all_metrics.append(metrics)
-            hidden_states.append(x)
+            all_hidden.append(x)
 
         x = self.final_norm(x)
         embedding = self.token_embedding.embedding
         logits = jnp.einsum("bld,vd->blv", x.astype(jnp.float32), embedding.astype(jnp.float32))
 
         if analysis_mode:
-            for i in range(len(hidden_states) - 1):
-                all_metrics[i]["z_L_hidden"] = hidden_states[i]
-            all_metrics[-1]["x_before_norm_hidden"] = hidden_states[-1]
+            for i in range(len(all_hidden) - 1):
+                all_metrics[i]["z_L"] = all_hidden[i]
+                all_metrics[i]["x"] = all_hidden[i + 1]
 
-        aggregate = self._aggregate_metrics(all_metrics)
-        all_metrics.append(aggregate)
+        all_metrics.append({})
 
         return logits, all_metrics
-
-    def _aggregate_metrics(self, all_metrics: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
-        metric_keys = [k for k in all_metrics[0].keys() if not k.endswith("_raw") and not k.endswith("_hidden")]
-        if not metric_keys:
-            return {}
-        stacked = {k: jnp.stack([m[k] for m in all_metrics]) for k in metric_keys}
-        return {f"avg_{k}": jnp.mean(v) for k, v in stacked.items()}

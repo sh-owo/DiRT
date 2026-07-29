@@ -19,14 +19,34 @@ class DirtLayer(nn.Module):
         z_L: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
+        analysis_mode: bool = False,
     ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         new = self.propose_block(z_L, positions, sincos)
-        z_L, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2 = self.review_block(z_L, new, positions, sincos)
-        metrics = {
-            "delta_v": delta_v_l2,
-            "imp_review": imp_review_l2,
-            "magnitude_mean": magnitude_mean,
-            "review": review_l2,
-            "out": out_l2,
-        }
-        return z_L, metrics
+        if analysis_mode:
+            out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2, \
+                delta_v, _review, direction, magnitude, review = \
+                self.review_block(z_L, new, positions, sincos, analysis_mode=True)
+            metrics = {
+                "delta_v": delta_v_l2,
+                "imp_review": imp_review_l2,
+                "magnitude_mean": magnitude_mean,
+                "review": review_l2,
+                "out": out_l2,
+                "delta_v_raw": delta_v,
+                "review_raw": review,
+                "direction_raw": direction,
+                "magnitude_raw": magnitude,
+                "new_raw": new,
+            }
+        else:
+            z_L, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2 = \
+                self.review_block(z_L, new, positions, sincos)
+            out = z_L
+            metrics = {
+                "delta_v": delta_v_l2,
+                "imp_review": imp_review_l2,
+                "magnitude_mean": magnitude_mean,
+                "review": review_l2,
+                "out": out_l2,
+            }
+        return out, metrics
