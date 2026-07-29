@@ -294,35 +294,23 @@ def collect_analysis_data(
         for L in range(n_layers_dirt):
             mag_full_list.append(gather_across_devices(dirt_metrics[L]["magnitude_raw"]))
 
-        s_local = max(subsample_per_batch // n_procs, 1)
-        rng_local = np.random.default_rng(42 + batch_id * 100 + proc_idx)
-        n_local = B_local * T
-        local_idx = rng_local.choice(n_local, min(s_local, n_local), replace=False)
-
         dv_gathered = []
         rv_gathered = []
         dr_gathered = []
         for L in range(n_layers_dirt):
-            flat_dv = np.array(dirt_metrics[L]["delta_v_raw"]).reshape(-1, d_model)
-            dv_gathered.append(gather_across_devices(flat_dv[local_idx]))
-            flat_rv = np.array(dirt_metrics[L]["review_raw"]).reshape(-1, d_model)
-            rv_gathered.append(gather_across_devices(flat_rv[local_idx]))
-            flat_dr = np.array(dirt_metrics[L]["direction_raw"]).reshape(-1, d_model)
-            dr_gathered.append(gather_across_devices(flat_dr[local_idx]))
+            dv_gathered.append(gather_across_devices(dirt_metrics[L]["delta_v_raw"]).reshape(-1, d_model))
+            rv_gathered.append(gather_across_devices(dirt_metrics[L]["review_raw"]).reshape(-1, d_model))
+            dr_gathered.append(gather_across_devices(dirt_metrics[L]["direction_raw"]).reshape(-1, d_model))
 
         hd_gathered = []
         for L in range(n_layers_dirt):
-            flat_h = np.array(dirt_metrics[L]["z_L_hidden"]).reshape(-1, d_model)
-            hd_gathered.append(gather_across_devices(flat_h[local_idx]))
-        flat_h_last = np.array(dirt_metrics[n_layers_dirt - 1]["x_before_norm_hidden"]).reshape(-1, d_model)
-        hd_gathered.append(gather_across_devices(flat_h_last[local_idx]))
+            hd_gathered.append(gather_across_devices(dirt_metrics[L]["z_L_hidden"]).reshape(-1, d_model))
+        hd_gathered.append(gather_across_devices(dirt_metrics[n_layers_dirt - 1]["x_before_norm_hidden"]).reshape(-1, d_model))
 
         hb_gathered = []
         for L in range(n_layers_base):
-            flat_h = np.array(base_metrics[L]["z_L"]).reshape(-1, d_model)
-            hb_gathered.append(gather_across_devices(flat_h[local_idx]))
-        flat_h_last = np.array(base_metrics[n_layers_base - 1]["x"]).reshape(-1, d_model)
-        hb_gathered.append(gather_across_devices(flat_h_last[local_idx]))
+            hb_gathered.append(gather_across_devices(base_metrics[L]["z_L"]).reshape(-1, d_model))
+        hb_gathered.append(gather_across_devices(base_metrics[n_layers_base - 1]["x"]).reshape(-1, d_model))
 
         if is_main:
             raw_token_ids[batch_id] = input_full
@@ -337,17 +325,19 @@ def collect_analysis_data(
             for L in range(n_layers_dirt):
                 mag_all[L][total:total + n_new] = np.abs(mag_full_list[L].ravel())
 
+            rng_batch = np.random.default_rng(42 + batch_id)
+            batch_indices = rng_batch.choice(n_new, min(subsample_per_batch, n_new), replace=False)
             for L in range(n_layers_dirt):
-                delta_v_list[L].append(dv_gathered[L])
-                review_list[L].append(rv_gathered[L])
-                direction_list[L].append(dr_gathered[L])
+                delta_v_list[L].append(dv_gathered[L][batch_indices])
+                review_list[L].append(rv_gathered[L][batch_indices])
+                direction_list[L].append(dr_gathered[L][batch_indices])
 
             for L in range(n_layers_dirt + 1):
-                hidden_dirt_list[L].append(hd_gathered[L])
+                hidden_dirt_list[L].append(hd_gathered[L][batch_indices])
             for L in range(n_layers_base + 1):
-                hidden_base_list[L].append(hb_gathered[L])
+                hidden_base_list[L].append(hb_gathered[L][batch_indices])
 
-            total_subsample += hd_gathered[0].shape[0]
+            total_subsample += len(batch_indices)
             total += n_new
             print(f"  batch {batch_id + 1}/{n_batches} — {total:,} pos, {total_subsample:,} subsampled")
 
