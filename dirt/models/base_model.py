@@ -20,13 +20,21 @@ class BaseLayer(nn.Module):
         z_L: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-        analysis_mode: bool = False,
     ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
         out = self.propose_block(z_L, positions, sincos)
-        metrics = {}
-        if analysis_mode:
-            metrics["z_L_raw"] = z_L
-            metrics["out_raw"] = out
+        return out, {}
+
+    def analyze(
+        self,
+        z_L: jnp.ndarray,
+        positions: jnp.ndarray,
+        sincos: tuple[jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+        out = self.propose_block(z_L, positions, sincos)
+        metrics = {
+            "z_L_raw": z_L,
+            "out_raw": out,
+        }
         return out, metrics
 
 
@@ -42,7 +50,7 @@ class BaseModel(nn.Module):
             dtype=self.dtype,
         )
         self.blocks = [
-            nn.remat(BaseLayer, static_argnums=(3,))(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
+            nn.remat(BaseLayer)(cfg=self.cfg, dtype=self.dtype, name=f"block_{i}")
             for i in range(self.cfg.n_blocks)
         ]
         self.final_norm = RMSNorm(self.cfg.d_model, eps=self.cfg.rms_norm_eps, dtype=self.dtype)
@@ -62,7 +70,10 @@ class BaseModel(nn.Module):
         all_metrics: list[dict] = []
         all_hidden: list[jnp.ndarray] = [x]
         for block in self.blocks:
-            x, metrics = block(x, positions, sincos, analysis_mode=analysis_mode)
+            if analysis_mode:
+                x, metrics = block.analyze(x, positions, sincos)
+            else:
+                x, metrics = block(x, positions, sincos)
             all_metrics.append(metrics)
             all_hidden.append(x)
 

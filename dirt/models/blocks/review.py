@@ -43,7 +43,6 @@ class ReviewBlock(nn.Module):
         new: jnp.ndarray,
         positions: jnp.ndarray,
         sincos: tuple[jnp.ndarray, jnp.ndarray],
-        analysis_mode: bool = False,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         batch, seq_len, _ = z_L.shape
         head_dim = self.cfg.head_dim
@@ -83,8 +82,53 @@ class ReviewBlock(nn.Module):
 
         out_l2 = jnp.linalg.norm(out, axis=-1)
 
-        if analysis_mode:
-            return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2, \
-                   delta_v, _review, direction, magnitude, review
-
         return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2
+
+    def analyze(
+        self,
+        z_L: jnp.ndarray,
+        new: jnp.ndarray,
+        positions: jnp.ndarray,
+        sincos: tuple[jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray,
+              jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        batch, seq_len, _ = z_L.shape
+        head_dim = self.cfg.head_dim
+
+        delta_v =  new - z_L
+
+        z_L_norm = self.norm_z_L(z_L)
+        delta_v_norm = self.norm_attn(delta_v)
+        q = self.q_proj(delta_v_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
+        k = self.k_proj(z_L_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
+        v = self.v_proj(z_L_norm).reshape(batch, seq_len, self.cfg.n_heads, head_dim)
+
+        q_t = jnp.transpose(q, (0, 2, 1, 3))
+        k_t = jnp.transpose(k, (0, 2, 1, 3))
+        v_t = jnp.transpose(v, (0, 2, 1, 3))
+
+        q_t, k_t = apply_rope(q_t, k_t, sincos, positions)
+        attn_out = causal_cross_attention(q_t, k_t, v_t)
+        attn_out = jnp.transpose(attn_out, (0, 2, 1, 3)).reshape(batch, seq_len, self.cfg.d_model)
+        attn_out = self.o_proj(attn_out)
+
+        _delta_v = delta_v + attn_out
+        ffn_norm = self.norm_ffn(_delta_v)
+        _review = swiglu(ffn_norm, self.gate_proj, self.up_proj, self.down_proj)
+
+        direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
+        magnitude = self.magnitude_linear(_delta_v)
+
+        review = direction * magnitude
+
+        out = new + review
+
+        delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
+        magnitude_mean = jnp.mean(magnitude, axis=-1)
+        imp_review_l2 = jnp.linalg.norm(_review, axis=-1)
+        review_l2 = jnp.linalg.norm(review, axis=-1)
+
+        out_l2 = jnp.linalg.norm(out, axis=-1)
+
+        return out, delta_v_l2, imp_review_l2, magnitude_mean, review_l2, out_l2, \
+               delta_v, _review, direction, magnitude, review
