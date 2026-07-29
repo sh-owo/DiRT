@@ -163,6 +163,10 @@ class AnalysisData:
     hidden_dirt: list[np.ndarray]
     hidden_base: list[np.ndarray]
 
+    sentence_hidden_dirt: list[np.ndarray] | None = None
+    sentence_hidden_base: list[np.ndarray] | None = None
+    sentence_texts: list[str] | None = None
+
     n_tokens: int = 0
     n_subsample: int = 0
     n_layers_dirt: int = 0
