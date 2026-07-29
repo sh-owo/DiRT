@@ -102,17 +102,25 @@ def load_and_shard_model(
             os.makedirs(cache_dir, exist_ok=True)
             fname = f"{model_type}_seed{seed}.safetensors"
             cached = os.path.join(cache_dir, fname)
-            if not os.path.exists(cached):
+            if os.path.exists(cached):
+                print(f"  Cache hit: {cached}")
+            else:
+                print(f"  Downloading from GCS → {cached} ...")
                 fs.get(local_path, cached)
+                print(f"  Download complete.")
             local_path = cached
         else:
             tmp = tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False)
             tmp_path = tmp.name
             tmp.close()
+            print(f"  Downloading from GCS to temp file...")
             fs.get(local_path, tmp_path)
+            print(f"  Download complete.")
             local_path = tmp_path
 
+    print(f"  Loading safetensors & sharding...")
     params = load_safetensors_checkpoint(local_path, model_cfg, mesh)
+    print(f"  Model loaded.")
 
     if cache_dir is None and local_path != str(ckpt_path):
         os.unlink(local_path)
@@ -258,6 +266,9 @@ def collect_analysis_data(
 
     data_sharding = create_data_sharding(mesh)
     shard_fn = get_data_shard_fn(mesh, data_sharding)
+
+    print(f"  Streaming {n_batches} batches ({batch_size} x {seq_len})...")
+    print(f"  (First batch includes JIT compilation — may take a few minutes)")
 
     for batch_id in range(n_batches):
         samples = []

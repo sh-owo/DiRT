@@ -102,6 +102,8 @@ def main():
             n_dirt = count_params(dirt_params)
             n_base = count_params(base_params)
             print(f"  DiRT params: {n_dirt:,}  |  Base params: {n_base:,}")
+        if seed_idx == 0 and is_main:
+            print(f"  Running inference (first call = JIT compile, may take a few min)...")
 
         ds_iter = iter(ds)
         rng = np.random.default_rng(42 + seed_idx)
