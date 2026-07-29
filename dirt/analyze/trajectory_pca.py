@@ -111,7 +111,7 @@ def run(
             ax.plot([new_L[x_i], z_next[x_i]], [new_L[y_i], z_next[y_i]],
                     "-", color=dirt_review_color, alpha=0.9, linewidth=2,
                     label="review" if show_legend and L == 0 else "")
-            pt += 3
+            pt += 2
 
         ax.scatter(data_dirt[-1, x_i], data_dirt[-1, y_i],
                   c=[end_color], s=60, marker="s", zorder=5, label="end")
@@ -158,7 +158,7 @@ def run(
                 color=dirt_new_color, alpha=0.9, linewidth=2, label="propose" if L == 0 else "")
         ax3d.plot(*np.column_stack([new_L, z_next]), "-",
                 color=dirt_review_color, alpha=0.9, linewidth=3, label="review" if L == 0 else "")
-        pt += 3
+        pt += 2
 
     ax3d.scatter(*mean_dirt[-1], c=end_color, s=120, marker="s", zorder=5, label="end")
     ax3d.set_xlabel("PC1")
