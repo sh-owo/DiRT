@@ -10,6 +10,13 @@ tokenizer_path: data/tokenizer
 
 cache_dir: checkpoints/analysis_200m
 
+dataset:
+  hf_name: HuggingFaceFW/fineweb-edu
+  hf_config: sample-10BT
+  split: train
+  text_key: text
+  eos_id: 1
+
 seeds: [1337, 42, 67, 3, 451]
 
 checkpoints:

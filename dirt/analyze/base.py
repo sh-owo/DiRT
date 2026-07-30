@@ -30,6 +30,11 @@ class AnalysisConfig:
     seeds: list[int]
     checkpoints: dict[str, dict[int, str]]
     cache_dir: str | None = None
+    dataset_hf_name: str = "Salesforce/wikitext"
+    dataset_hf_config: str = "wikitext-103-raw-v1"
+    dataset_split: str = "train"
+    dataset_text_key: str = "text"
+    dataset_eos_id: int = 1
 
 
 def load_analysis_config(path: str) -> AnalysisConfig:
@@ -40,6 +45,7 @@ def load_analysis_config(path: str) -> AnalysisConfig:
         "dirt": {int(k): v for k, v in ckpt_raw["dirt"].items()},
         "base": {int(k): v for k, v in ckpt_raw["base"].items()},
     }
+    dset = raw.get("dataset", {})
     return AnalysisConfig(
         model_size=raw["model_size"],
         n_batches=raw["n_batches"],
@@ -52,6 +58,11 @@ def load_analysis_config(path: str) -> AnalysisConfig:
         seeds=raw["seeds"],
         checkpoints=checkpoints,
         cache_dir=raw.get("cache_dir", None),
+        dataset_hf_name=dset.get("hf_name", "Salesforce/wikitext"),
+        dataset_hf_config=dset.get("hf_config", "wikitext-103-raw-v1"),
+        dataset_split=dset.get("split", "train"),
+        dataset_text_key=dset.get("text_key", "text"),
+        dataset_eos_id=dset.get("eos_id", 1),
     )
 
 
@@ -188,11 +199,13 @@ def create_data_sharding(mesh):
 
 
 def build_chunked_batches(
-    data_iter, tokenizer, seq_len: int, batch_size: int, n_batches: int
+    data_iter, tokenizer, seq_len: int, batch_size: int, n_batches: int,
+    text_key: str = "text", eos_id: int = 1,
 ) -> np.ndarray:
     buffer = []
     for sample in data_iter:
-        ids = tokenizer.encode(sample["text"], out_type=int)
+        ids = tokenizer.encode(sample[text_key], out_type=int, add_bos=False, add_eos=False)
+        ids.append(eos_id)
         buffer.extend(ids)
         if len(buffer) >= n_batches * batch_size * seq_len:
             break
@@ -322,13 +335,16 @@ def collect_analysis_data(
                 gather_across_devices(dirt_metrics[L]["magnitude_raw"])[:, :-1, :]
             )
 
-        dv_gathered = []
-        rv_gathered = []
-        dr_gathered = []
+        dv_raw_full = []
+        rv_raw_full = []
+        dr_raw_full = []
         for L in range(n_layers_dirt):
-            dv_gathered.append(gather_across_devices(dirt_metrics[L]["delta_v_raw"])[:, :-1, :].reshape(-1, d_model))
-            rv_gathered.append(gather_across_devices(dirt_metrics[L]["review_raw"])[:, :-1, :].reshape(-1, d_model))
-            dr_gathered.append(gather_across_devices(dirt_metrics[L]["direction_raw"])[:, :-1, :].reshape(-1, d_model))
+            dv_raw_full.append(gather_across_devices(dirt_metrics[L]["delta_v_raw"]))
+            rv_raw_full.append(gather_across_devices(dirt_metrics[L]["review_raw"]))
+            dr_raw_full.append(gather_across_devices(dirt_metrics[L]["direction_raw"]))
+        dv_gathered = [h[:, :-1, :].reshape(-1, d_model) for h in dv_raw_full]
+        rv_gathered = [h[:, :-1, :].reshape(-1, d_model) for h in rv_raw_full]
+        dr_gathered = [h[:, :-1, :].reshape(-1, d_model) for h in dr_raw_full]
 
         hd_gathered_raw = []
         for L in range(n_layers_dirt):
@@ -387,14 +403,8 @@ def collect_analysis_data(
                     sent_token_ids_arr[sent_token_ids_arr != int(pad_id)].tolist()
                 )
 
-                sent_dv_raw_arr = [
-                    gather_across_devices(dirt_metrics[L]["delta_v_raw"])[0]
-                    for L in range(n_layers_dirt)
-                ]
-                sent_rv_raw_arr = [
-                    gather_across_devices(dirt_metrics[L]["review_raw"])[0]
-                    for L in range(n_layers_dirt)
-                ]
+                sent_dv_raw_arr = [h[0] for h in dv_raw_full]
+                sent_rv_raw_arr = [h[0] for h in rv_raw_full]
 
             total_subsample += len(batch_indices)
             total += n_new

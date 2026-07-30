@@ -62,7 +62,12 @@ def main():
     pad_id = tokenizer.pad_id()
 
     from datasets import load_dataset
-    ds = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train", streaming=True)
+    ds = load_dataset(
+        config.dataset_hf_name,
+        config.dataset_hf_config,
+        split=config.dataset_split,
+        streaming=True,
+    )
 
     all_results = {}
     results_by_seed = {}
@@ -114,6 +119,8 @@ def main():
             seq_len=config.seq_len,
             batch_size=config.batch_size,
             n_batches=config.n_batches,
+            text_key=config.dataset_text_key,
+            eos_id=config.dataset_eos_id,
         )
 
         data = collect_analysis_data(
@@ -212,6 +219,7 @@ def main():
             result["_env_n_batches"] = config.n_batches
             result["_env_batch_size"] = config.batch_size
             result["_env_seq_len"] = config.seq_len
+            result["_env_dataset"] = f"{config.dataset_hf_name}/{config.dataset_hf_config}"
             if test_name == "position_ppl":
                 result["_env_n_deciles"] = 10
             if test_name == "trajectory_pca":
