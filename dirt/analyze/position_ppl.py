@@ -70,6 +70,33 @@ def run(
             decile_max_delta.append(0.0)
             decile_median_delta.append(0.0)
 
+    decile_edges_dirt = np.percentile(dirt_loss, np.linspace(0, 100, 11))
+    ddecile_mean_delta = []
+    ddecile_std_delta = []
+    ddecile_min_delta = []
+    ddecile_max_delta = []
+    ddecile_median_delta = []
+    for i in range(10):
+        lo, hi = decile_edges_dirt[i], decile_edges_dirt[i + 1]
+        if i == 9:
+            mask = (dirt_loss >= lo) & (dirt_loss <= hi)
+        else:
+            mask = (dirt_loss >= lo) & (dirt_loss < hi)
+        c = int(mask.sum())
+        if c > 0:
+            delta = dirt_loss[mask] - base_loss[mask]
+            ddecile_mean_delta.append(float(np.mean(delta)))
+            ddecile_std_delta.append(float(np.std(delta)))
+            ddecile_min_delta.append(float(np.min(delta)))
+            ddecile_max_delta.append(float(np.max(delta)))
+            ddecile_median_delta.append(float(np.median(delta)))
+        else:
+            ddecile_mean_delta.append(0.0)
+            ddecile_std_delta.append(0.0)
+            ddecile_min_delta.append(0.0)
+            ddecile_max_delta.append(0.0)
+            ddecile_median_delta.append(0.0)
+
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -97,13 +124,29 @@ def run(
         ax2.axhline(0, color="black", linewidth=0.5)
         ax2.set_xlabel("Base NLL decile")
         ax2.set_ylabel("DiRT NLL - Base NLL")
-        ax2.set_title("ΔNLL by difficulty decile")
+        ax2.set_title("ΔNLL by difficulty decile (Base)")
         ax2.set_xticks(x_pos)
         ax2.set_xticklabels([f"{i*10}-{(i+1)*10}%" for i in range(10)], rotation=45, fontsize=8)
         ax2.grid(True, alpha=0.3)
         fig2.tight_layout()
         fig2.savefig(output_dir / "1b_delta_nll_decile.png", dpi=150)
         plt.close(fig2)
+
+        fig3, ax3 = plt.subplots(figsize=(8, 5))
+        colors_d = ["green" if d < 0 else "red" for d in ddecile_mean_delta]
+        ax3.bar(x_pos, ddecile_mean_delta, color=colors_d, alpha=0.7)
+        ax3.errorbar(x_pos, ddecile_mean_delta, yerr=ddecile_std_delta,
+                     fmt="none", capsize=3, color="black", alpha=0.5)
+        ax3.axhline(0, color="black", linewidth=0.5)
+        ax3.set_xlabel("DiRT NLL decile")
+        ax3.set_ylabel("DiRT NLL - Base NLL")
+        ax3.set_title("ΔNLL by difficulty decile (DiRT)")
+        ax3.set_xticks(x_pos)
+        ax3.set_xticklabels([f"{i*10}-{(i+1)*10}%" for i in range(10)], rotation=45, fontsize=8)
+        ax3.grid(True, alpha=0.3)
+        fig3.tight_layout()
+        fig3.savefig(output_dir / "1c_delta_nll_decile_dirt.png", dpi=150)
+        plt.close(fig3)
 
     except ImportError:
         print("  [test_1b] matplotlib not available, skipping plots")
@@ -116,9 +159,18 @@ def run(
         results[f"decile_{i}_delta_max"] = decile_max_delta[i]
         results[f"decile_{i}_delta_median"] = decile_median_delta[i]
         results[f"decile_{i}_base_mean"] = decile_mean_loss[i]
+        results[f"ddecile_{i}_delta_mean"] = ddecile_mean_delta[i]
+        results[f"ddecile_{i}_delta_std"] = ddecile_std_delta[i]
+        results[f"ddecile_{i}_delta_min"] = ddecile_min_delta[i]
+        results[f"ddecile_{i}_delta_max"] = ddecile_max_delta[i]
+        results[f"ddecile_{i}_delta_median"] = ddecile_median_delta[i]
 
     print(f"\n=== position_ppl (seed {seed}) ===")
+    print(f"  [Base decile]")
     for i in range(10):
         print(f"  decile {i*10}-{(i+1)*10}%: Δ={decile_mean_delta[i]:+.4f}±{decile_std_delta[i]:.4f}  base_mean={decile_mean_loss[i]:.4f}")
+    print(f"  [DiRT decile]")
+    for i in range(10):
+        print(f"  ddecile {i*10}-{(i+1)*10}%: Δ={ddecile_mean_delta[i]:+.4f}±{ddecile_std_delta[i]:.4f}")
 
     return results
