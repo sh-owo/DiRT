@@ -6,6 +6,12 @@ import numpy as np
 from scipy.stats import spearmanr
 
 
+def _decode(tokenizer, ids, skip_special=True):
+    if tokenizer is None:
+        return f"[id={ids[0]}]"
+    return tokenizer.decode(ids, skip_special_tokens=skip_special)
+
+
 def run(
     magnitudes: list[np.ndarray],
     dirt_loss: np.ndarray,
@@ -87,9 +93,12 @@ def run(
                     b_id, b, t = pos_ids[idx]
                     ids_arr = token_ids.get(b_id, np.array([[0]]))
                     if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
-                        tok_id = int(ids_arr[b, t])
-                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
-                        f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | {tok_str}\n")
+                        ctx_start = max(0, t - 20)
+                        ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
+                        ctx_str = _decode(tokenizer, ctx_ids)
+                        tok_str = _decode(tokenizer, [int(ids_arr[b, t])])
+                        f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | ctx[-20:] → [{tok_str}]\n")
+                        f.write(f"    {ctx_str}\n")
 
             f.write(f"\n=== Layer {L} — position>0, dedup by token ===\n")
             idx_pos = np.where(mask_pos)[0]
@@ -101,12 +110,16 @@ def run(
                     ids_arr = token_ids.get(b_id, np.array([[0]]))
                     if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
                         tok_id = int(ids_arr[b, t])
-                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
+                        tok_str = _decode(tokenizer, [tok_id])
                         if tok_str not in seen_tokens or mag[idx] > seen_tokens[tok_str][0]:
-                            seen_tokens[tok_str] = (mag[idx], loss[idx], pos_ids[idx])
+                            ctx_start = max(0, t - 20)
+                            ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
+                            ctx_str = _decode(tokenizer, ctx_ids)
+                            seen_tokens[tok_str] = (mag[idx], loss[idx], ctx_str)
                 sorted_tokens = sorted(seen_tokens.items(), key=lambda x: -x[1][0])[:n_top]
-                for tok_str, (m_val, l_val, _) in sorted_tokens:
-                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | {tok_str}\n")
+                for tok_str, (m_val, l_val, ctx_str) in sorted_tokens:
+                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | ctx[-20:] → [{tok_str}]\n")
+                    f.write(f"    {ctx_str}\n")
 
             f.write(f"\n=== Layer {L} — |magnitude| 하위 {n_top} (position>0) ===\n")
             if len(idx_pos) > 0:
@@ -117,12 +130,16 @@ def run(
                     ids_arr = token_ids.get(b_id, np.array([[0]]))
                     if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
                         tok_id = int(ids_arr[b, t])
-                        tok_str = tokenizer.decode([tok_id]) if tokenizer else f"[id={tok_id}]"
+                        tok_str = _decode(tokenizer, [tok_id])
                         if tok_str not in seen_low or mag[idx] < seen_low[tok_str][0]:
-                            seen_low[tok_str] = (mag[idx], loss[idx], pos_ids[idx])
+                            ctx_start = max(0, t - 20)
+                            ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
+                            ctx_str = _decode(tokenizer, ctx_ids)
+                            seen_low[tok_str] = (mag[idx], loss[idx], ctx_str)
                 sorted_low = sorted(seen_low.items(), key=lambda x: x[1][0])[:n_top]
-                for tok_str, (m_val, l_val, _) in sorted_low:
-                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | {tok_str}\n")
+                for tok_str, (m_val, l_val, ctx_str) in sorted_low:
+                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | ctx[-20:] → [{tok_str}]\n")
+                    f.write(f"    {ctx_str}\n")
 
     print(f"\n=== magnitude_difficulty (seed {seed}) ===")
     for L in range(n_layers):

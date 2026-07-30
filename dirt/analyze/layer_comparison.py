@@ -37,14 +37,22 @@ def run(
         fig.savefig(output_dir / "1f_comparison.png", dpi=150)
         plt.close(fig)
 
-        fig2, ax2 = plt.subplots(figsize=(8, 4))
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
         metrics_labels = ["Val NLL", "Params (M)"]
         dirt_vals = [dirt_val_loss, dirt_n_params / 1e6]
         base_vals = [base_val_loss, base_n_params / 1e6]
         x = np.arange(len(metrics_labels))
         w = 0.35
-        ax2.bar(x - w / 2, dirt_vals, w, label="DiRT 6L", color="#2196F3", alpha=0.8)
-        ax2.bar(x + w / 2, base_vals, w, label="GPT 12L", color="#FF5722", alpha=0.8)
+        bars1 = ax2.bar(x - w / 2, dirt_vals, w, label="DiRT 6L", color="#2196F3", alpha=0.8)
+        bars2 = ax2.bar(x + w / 2, base_vals, w, label="GPT 12L", color="#FF5722", alpha=0.8)
+        for bar, val in zip(bars1, dirt_vals):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                    f"{val:.4f}" if "NLL" in bar else f"{val:.1f}M",
+                    ha="center", va="bottom", fontsize=10)
+        for bar, val in zip(bars2, base_vals):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                    f"{val:.4f}" if "NLL" in bar else f"{val:.1f}M",
+                    ha="center", va="bottom", fontsize=10)
         ax2.set_xticks(x)
         ax2.set_xticklabels(metrics_labels)
         ax2.legend()

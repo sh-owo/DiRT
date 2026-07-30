@@ -430,6 +430,11 @@ def save_csv(results: dict, path: Path):
             return (str(k[0]), str(k[1]))
         for (seed, test_name), metrics in sorted(results.items(), key=_sort_key):
             for metric_name, value in metrics.items():
+                is_env = metric_name.startswith("_env_")
+                out_test = "env" if is_env else test_name
+                out_metric = metric_name[5:] if is_env else metric_name
                 if isinstance(value, (int, float, np.integer, np.floating)):
-                    writer.writerow([test_name, str(seed), metric_name, float(value)])
+                    writer.writerow([out_test, str(seed), out_metric, float(value)])
+                elif is_env and isinstance(value, str):
+                    writer.writerow([out_test, str(seed), out_metric, value])
     print(f"CSV saved to {path}")

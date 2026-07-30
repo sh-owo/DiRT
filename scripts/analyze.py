@@ -170,7 +170,9 @@ def main():
             elif test_name == "propose_review_cosine":
                 kwargs = dict(delta_v=data.delta_v, review=data.review,
                               direction=data.direction, n_layers=data.n_layers_dirt,
-                              output_dir=seed_output, seed=seed)
+                              output_dir=seed_output, seed=seed,
+                              hidden_base=data.hidden_base,
+                              n_layers_base=data.n_layers_base)
             elif test_name == "gain_magnitude":
                 kwargs = dict(dirt_loss=data.dirt_loss, base_loss=data.base_loss,
                               magnitudes=data.magnitudes, n_layers=data.n_layers_dirt,
@@ -187,6 +189,24 @@ def main():
                               tokenizer=tokenizer)
 
             result = mod.run(**kwargs)
+
+            result["_env_n_tokens"] = data.n_tokens
+            result["_env_n_subsample"] = data.n_subsample
+            result["_env_n_layers_dirt"] = data.n_layers_dirt
+            result["_env_n_layers_base"] = data.n_layers_base
+            result["_env_d_model"] = data.d_model
+            result["_env_n_batches"] = config.n_batches
+            result["_env_batch_size"] = config.batch_size
+            result["_env_seq_len"] = config.seq_len
+            if test_name == "position_ppl":
+                result["_env_n_deciles"] = 10
+            if test_name == "trajectory_pca":
+                result["_env_n_pc"] = 5
+            if test_name == "gain_magnitude":
+                result["_env_gain_pct"] = "top/bottom 10%"
+            if test_name == "magnitude_difficulty":
+                result["_env_position_bands"] = "pos=0,pos1-10,pos10-50,pos50+"
+
             all_results[(seed, test_name)] = result
 
         all_results[(seed, "overall")] = {
@@ -207,6 +227,8 @@ def main():
     agg_dir.mkdir(parents=True, exist_ok=True)
 
     result_seed = seed_verification.run_aggregate(seed_results_for_aggregation, agg_dir)
+    result_seed["_env_n_seeds"] = len(seed_results_for_aggregation)
+    result_seed["_env_seeds"] = ",".join(str(s) for s in sorted(seed_results_for_aggregation.keys()))
     all_results[("all", "seed_verification")] = result_seed
 
     dirt_n = count_params(first_seed_dirt_params)
@@ -221,6 +243,8 @@ def main():
         output_dir=agg_dir,
     )
     all_results[("all", "layer_comparison")] = result_layer
+    result_layer["_env_dirt_config"] = str(config.dirt_config)
+    result_layer["_env_base_config"] = str(config.base_config)
 
     csv_path = output_dir / "analysis_results.csv"
     save_csv(all_results, csv_path)
