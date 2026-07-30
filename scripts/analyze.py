@@ -186,7 +186,11 @@ def main():
                               sentence_hidden_dirt=data.sentence_hidden_dirt,
                               sentence_hidden_base=data.sentence_hidden_base,
                               sentence_texts=data.sentence_texts,
-                              tokenizer=tokenizer)
+                              tokenizer=tokenizer,
+                              sent_full_hidden_dirt=data.sent_full_hidden_dirt,
+                              sent_full_hidden_base=data.sent_full_hidden_base,
+                              sent_token_ids=data.sent_token_ids,
+                              sent_text=data.sent_text)
 
             result = mod.run(**kwargs)
 

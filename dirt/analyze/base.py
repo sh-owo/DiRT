@@ -167,6 +167,11 @@ class AnalysisData:
     sentence_hidden_base: list[np.ndarray] | None = None
     sentence_texts: list[str] | None = None
 
+    sent_full_hidden_dirt: list[np.ndarray] | None = None
+    sent_full_hidden_base: list[np.ndarray] | None = None
+    sent_token_ids: np.ndarray | None = None
+    sent_text: str | None = None
+
     n_tokens: int = 0
     n_subsample: int = 0
     n_layers_dirt: int = 0
@@ -270,6 +275,10 @@ def collect_analysis_data(
     sentence_hidden_dirt_arr = None
     sentence_hidden_base_arr = None
     sentence_texts_arr = None
+    sent_full_hidden_dirt_arr = None
+    sent_full_hidden_base_arr = None
+    sent_token_ids_arr = None
+    sent_text_str = None
 
     data_sharding = create_data_sharding(mesh)
     shard_fn = get_data_shard_fn(mesh, data_sharding)
@@ -366,6 +375,20 @@ def collect_analysis_data(
                     text = tokenizer.decode(ids[ids != int(pad_id)].tolist())
                     sentence_texts_arr.append(text)
 
+                T_full = input_full.shape[1]
+                sent_full_hidden_dirt_arr = [
+                    hd_gathered[L].reshape(B_full, T_full, d_model)[0]
+                    for L in range(n_layers_dirt + 1)
+                ]
+                sent_full_hidden_base_arr = [
+                    hb_gathered[L].reshape(B_full, T_full, d_model)[0]
+                    for L in range(n_layers_base + 1)
+                ]
+                sent_token_ids_arr = input_full[0]
+                sent_text_str = tokenizer.decode(
+                    sent_token_ids_arr[sent_token_ids_arr != int(pad_id)].tolist()
+                )
+
             total_subsample += len(batch_indices)
             total += n_new
             print(f"  batch {batch_id + 1}/{n_batches} — {total:,} pos, {total_subsample:,} subsampled")
@@ -399,25 +422,29 @@ def collect_analysis_data(
     print(f"\nTotal: {total:,} positions, {total_subsample:,} subsampled for vectors")
 
     return AnalysisData(
-        dirt_loss=dirt_loss_all,
-        base_loss=base_loss_all,
-        pos_ids=pos_ids_all,
-        token_ids=token_ids_map,
-        magnitudes=mag_all,
-        delta_v=delta_v,
-        review=review,
-        direction=direction,
-        hidden_dirt=hidden_dirt,
-        hidden_base=hidden_base,
-        sentence_hidden_dirt=sentence_hidden_dirt_arr,
-        sentence_hidden_base=sentence_hidden_base_arr,
-        sentence_texts=sentence_texts_arr,
-        n_tokens=total,
-        n_subsample=total_subsample,
-        n_layers_dirt=n_layers_dirt,
-        n_layers_base=n_layers_base,
-        d_model=d_model,
-    )
+            dirt_loss=dirt_loss_all,
+            base_loss=base_loss_all,
+            pos_ids=pos_ids_all,
+            token_ids=token_ids_map,
+            magnitudes=mag_all,
+            delta_v=delta_v,
+            review=review,
+            direction=direction,
+            hidden_dirt=hidden_dirt,
+            hidden_base=hidden_base,
+            sentence_hidden_dirt=sentence_hidden_dirt_arr,
+            sentence_hidden_base=sentence_hidden_base_arr,
+            sentence_texts=sentence_texts_arr,
+            sent_full_hidden_dirt=sent_full_hidden_dirt_arr if total > 0 else None,
+            sent_full_hidden_base=sent_full_hidden_base_arr if total > 0 else None,
+            sent_token_ids=sent_token_ids_arr if total > 0 else None,
+            sent_text=sent_text_str if total > 0 else None,
+            n_tokens=total,
+            n_subsample=total_subsample,
+            n_layers_dirt=n_layers_dirt,
+            n_layers_base=n_layers_base,
+            d_model=d_model,
+        )
 
 
 def save_csv(results: dict, path: Path):
