@@ -100,7 +100,7 @@ def run(
                         ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
                         ctx_str = _decode(tokenizer, ctx_ids)
                         tok_str = _decode(tokenizer, [int(ids_arr[b, t])])
-                        f.write(f"  mag={mag[idx]:.6f} | loss={loss[idx]:.4f} | ctx[-20:] → [{tok_str}]\n")
+                        f.write(f"  loss={loss[idx]:.4f} | mag={mag[idx]:.6f} | ctx[-20:] → [{tok_str}]\n")
                         f.write(f"    {ctx_str}\n")
 
             f.write(f"\n=== Layer {L} — position>0, dedup by token ===\n")
@@ -108,40 +108,46 @@ def run(
             if len(idx_pos) > 0:
                 mag_pos = mag[idx_pos]
                 seen_tokens = {}
-                for idx in idx_pos[np.argsort(mag_pos)[-n_top * 5:]]:
-                    b_id, b, t = pos_ids[idx]
+                order = np.argsort(mag_pos)
+                for idx in reversed(order):
+                    b_id, b, t = pos_ids[idx_pos[idx]]
                     ids_arr = token_ids.get(b_id, np.array([[0]]))
                     if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
                         tok_id = int(ids_arr[b, t])
                         tok_str = _decode(tokenizer, [tok_id])
-                        if tok_str not in seen_tokens or mag[idx] > seen_tokens[tok_str][0]:
+                        if tok_str not in seen_tokens:
                             ctx_start = max(0, t - 20)
                             ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
                             ctx_str = _decode(tokenizer, ctx_ids)
-                            seen_tokens[tok_str] = (mag[idx], loss[idx], ctx_str)
+                            seen_tokens[tok_str] = (mag[idx_pos[idx]], loss[idx_pos[idx]], ctx_str)
+                        if len(seen_tokens) >= n_top:
+                            break
                 sorted_tokens = sorted(seen_tokens.items(), key=lambda x: -x[1][0])[:n_top]
                 for tok_str, (m_val, l_val, ctx_str) in sorted_tokens:
-                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | ctx[-20:] → [{tok_str}]\n")
+                    f.write(f"  loss={l_val:.4f} | mag={m_val:.6f} | ctx[-20:] → [{tok_str}]\n")
                     f.write(f"    {ctx_str}\n")
 
             f.write(f"\n=== Layer {L} — |magnitude| 하위 {n_top} (position>0) ===\n")
             if len(idx_pos) > 0:
                 mag_pos = mag[idx_pos]
                 seen_low = {}
-                for idx in idx_pos[np.argsort(mag_pos)[:n_top * 5]]:
-                    b_id, b, t = pos_ids[idx]
+                order = np.argsort(mag_pos)
+                for idx in order:
+                    b_id, b, t = pos_ids[idx_pos[idx]]
                     ids_arr = token_ids.get(b_id, np.array([[0]]))
                     if b < ids_arr.shape[0] and t < ids_arr.shape[1]:
                         tok_id = int(ids_arr[b, t])
                         tok_str = _decode(tokenizer, [tok_id])
-                        if tok_str not in seen_low or mag[idx] < seen_low[tok_str][0]:
+                        if tok_str not in seen_low:
                             ctx_start = max(0, t - 20)
                             ctx_ids = ids_arr[b, ctx_start:t + 1].tolist()
                             ctx_str = _decode(tokenizer, ctx_ids)
-                            seen_low[tok_str] = (mag[idx], loss[idx], ctx_str)
+                            seen_low[tok_str] = (mag[idx_pos[idx]], loss[idx_pos[idx]], ctx_str)
+                        if len(seen_low) >= n_top:
+                            break
                 sorted_low = sorted(seen_low.items(), key=lambda x: x[1][0])[:n_top]
                 for tok_str, (m_val, l_val, ctx_str) in sorted_low:
-                    f.write(f"  mag={m_val:.6f} | loss={l_val:.4f} | ctx[-20:] → [{tok_str}]\n")
+                    f.write(f"  loss={l_val:.4f} | mag={m_val:.6f} | ctx[-20:] → [{tok_str}]\n")
                     f.write(f"    {ctx_str}\n")
 
     print(f"\n=== magnitude_difficulty (seed {seed}) ===")

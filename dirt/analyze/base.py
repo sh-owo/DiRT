@@ -201,13 +201,13 @@ def run_inference(model, params, input_sharded, analysis_mode: bool = False):
     )
 
 
-def compute_per_token_loss(logits, input_ids):
+def compute_per_token_loss(logits, targets):
     logits_float = logits.astype(jnp.float32)
     log_probs = jax.nn.log_softmax(logits_float, axis=-1)
     nll = -log_probs[
-        jnp.arange(input_ids.shape[0])[:, None],
-        jnp.arange(input_ids.shape[1])[None, :],
-        input_ids,
+        jnp.arange(targets.shape[0])[:, None],
+        jnp.arange(targets.shape[1])[None, :],
+        targets,
     ]
     return nll
 
@@ -245,7 +245,7 @@ def collect_analysis_data(
     n_procs = jax.process_count()
     proc_idx = jax.process_index()
     B_per_proc = batch_size // n_procs
-    max_positions = n_batches * batch_size * seq_len
+    max_positions = n_batches * batch_size * (seq_len - 1)
     n_layers_dirt = dirt_model.cfg.n_blocks
     n_layers_base = base_model.cfg.n_blocks
     d_model = dirt_model.cfg.d_model
@@ -298,19 +298,21 @@ def collect_analysis_data(
             base_model, base_params, input_sharded, analysis_mode=True
         )
 
-        dirt_nll = compute_per_token_loss(dirt_logits, input_sharded)
-        base_nll = compute_per_token_loss(base_logits, input_sharded)
+        dirt_nll = compute_per_token_loss(dirt_logits[:, :-1, :], input_sharded[:, 1:])
+        base_nll = compute_per_token_loss(base_logits[:, :-1, :], input_sharded[:, 1:])
 
         input_full = gather_across_devices(input_sharded)
         dirt_nll_full = gather_across_devices(dirt_nll)
         base_nll_full = gather_across_devices(base_nll)
 
         B_full, T = input_full.shape
-        n_new = B_full * T
+        n_new = B_full * (T - 1)
 
         mag_full_list = []
         for L in range(n_layers_dirt):
-            mag_full_list.append(gather_across_devices(dirt_metrics[L]["magnitude_raw"]))
+            mag_full_list.append(
+                gather_across_devices(dirt_metrics[L]["magnitude_raw"])[:, :-1, :]
+            )
 
         dv_gathered = []
         rv_gathered = []
@@ -336,8 +338,8 @@ def collect_analysis_data(
             base_loss_all[total:total + n_new] = base_nll_full.ravel()
             pos_ids_all[total:total + n_new] = np.column_stack([
                 np.full(n_new, batch_id, dtype=np.int32),
-                np.repeat(np.arange(B_full, dtype=np.int32), T),
-                np.tile(np.arange(T, dtype=np.int32), B_full),
+                np.repeat(np.arange(B_full, dtype=np.int32), T - 1),
+                np.tile(np.arange(1, T, dtype=np.int32), B_full),
             ])
 
             for L in range(n_layers_dirt):

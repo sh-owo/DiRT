@@ -30,7 +30,7 @@ def run(
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.001,
                     f"{val:.4f}", ha="center", va="bottom", fontsize=11)
         ax.set_ylabel("Validation NLL")
-        ax.set_title("DiRT 6L vs GPT 12L")
+        ax.set_title(f"DiRT 6L ({dirt_n_params:,} params) vs GPT 12L ({base_n_params:,} params)")
         ax.grid(True, axis="y", alpha=0.3)
 
         plt.tight_layout()
@@ -43,8 +43,8 @@ def run(
         base_vals = [base_val_loss, base_n_params / 1e6]
         x = np.arange(len(metrics_labels))
         w = 0.35
-        bars1 = ax2.bar(x - w / 2, dirt_vals, w, label="DiRT 6L", color="#2196F3", alpha=0.8)
-        bars2 = ax2.bar(x + w / 2, base_vals, w, label="GPT 12L", color="#FF5722", alpha=0.8)
+        bars1 = ax2.bar(x - w / 2, dirt_vals, w, label=f"DiRT 6L ({dirt_n_params:,})", color="#2196F3", alpha=0.8)
+        bars2 = ax2.bar(x + w / 2, base_vals, w, label=f"Base 12L ({base_n_params:,})", color="#FF5722", alpha=0.8)
         for i, (bar, val) in enumerate(zip(bars1, dirt_vals)):
             ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                     f"{val:.4f}" if "NLL" in metrics_labels[i] else f"{val:.1f}M",

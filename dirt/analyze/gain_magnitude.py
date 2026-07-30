@@ -32,8 +32,16 @@ def run(
     p10 = int(len(gain) * 0.1)
     top_gain_idx = np.argsort(gain)[-p10:]
     bot_gain_idx = np.argsort(gain)[:p10]
-    mean_mag_top = float(np.mean(mag_total[top_gain_idx]))
-    mean_mag_bot = float(np.mean(mag_total[bot_gain_idx]))
+    mag_top = mag_total[top_gain_idx]
+    mag_bot = mag_total[bot_gain_idx]
+    mean_mag_top = float(np.mean(mag_top))
+    mean_mag_bot = float(np.mean(mag_bot))
+    std_mag_top = float(np.std(mag_top))
+    std_mag_bot = float(np.std(mag_bot))
+    min_mag_top = float(np.min(mag_top))
+    max_mag_top = float(np.max(mag_top))
+    min_mag_bot = float(np.min(mag_bot))
+    max_mag_bot = float(np.max(mag_bot))
 
     try:
         import matplotlib
@@ -71,13 +79,20 @@ def run(
     print(f"\n=== gain_magnitude (seed {seed}) ===")
     print(f"  spearman ρ={rho:.4f}  p={p:.2e}")
     print(f"  top 10% gain: mean_mag={mean_mag_top:.6f}")
-    print(f"  bottom 10% gain: mean_mag={mean_mag_bot:.6f}")
+    print(f"  top 10% gain: mean_mag={mean_mag_top:.4f} std={std_mag_top:.4f} min={min_mag_top:.4f} max={max_mag_top:.4f}")
+    print(f"  bottom 10% gain: mean_mag={mean_mag_bot:.4f} std={std_mag_bot:.4f} min={min_mag_bot:.4f} max={max_mag_bot:.4f}")
     print(f"  → {'Positive correlation ✓' if rho > 0 and p < 0.05 else 'Weak/no correlation'}")
 
     return {
         "spearman_rho": float(rho),
         "spearman_p": float(p),
         "mean_mag_top_gain": mean_mag_top,
+        "std_mag_top_gain": std_mag_top,
+        "min_mag_top_gain": min_mag_top,
+        "max_mag_top_gain": max_mag_top,
         "mean_mag_bot_gain": mean_mag_bot,
+        "std_mag_bot_gain": std_mag_bot,
+        "min_mag_bot_gain": min_mag_bot,
+        "max_mag_bot_gain": max_mag_bot,
         "n_valid_tokens": int(len(gain)),
     }

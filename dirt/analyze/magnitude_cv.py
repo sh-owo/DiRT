@@ -44,9 +44,12 @@ def run(
 
     results = {}
     for L in range(n_layers):
+        mag = magnitudes[L]
         results[f"cv_layer_{L}"] = cv_values[L]
-        results[f"mean_mag_layer_{L}"] = float(np.mean(magnitudes[L]))
-        results[f"std_mag_layer_{L}"] = float(np.std(magnitudes[L]))
+        results[f"mean_mag_layer_{L}"] = float(np.mean(mag))
+        results[f"std_mag_layer_{L}"] = float(np.std(mag))
+        results[f"min_mag_layer_{L}"] = float(np.min(mag))
+        results[f"max_mag_layer_{L}"] = float(np.max(mag))
 
     print(f"\n=== magnitude_cv (seed {seed}) ===")
     for L in range(n_layers):
