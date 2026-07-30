@@ -225,7 +225,7 @@ def run(
                 pts.append(wh[L + 1])
             return np.concatenate(pts, axis=0)
 
-        def _plot_window(ax, traj, cmap, n_l, pc_i, pc_j, marker_start="*", marker_end="X"):
+        def _plot_window_dirt(ax, traj, cmap, n_l, pc_i, pc_j, marker_start="*", marker_end="X"):
             pt = 0
             for L in range(n_l):
                 alpha = 0.3 + 0.7 * L / max(n_l - 1, 1)
@@ -248,6 +248,20 @@ def run(
             ax.set_ylabel(f"PC{pc_j + 1}")
             ax.grid(True, alpha=0.3)
 
+        def _plot_window_base(ax, traj, cmap, n_l, pc_i, pc_j, marker_start="*", marker_end="X"):
+            for i in range(n_l):
+                alpha = 0.3 + 0.7 * i / max(n_l - 1, 1)
+                c = cmap(alpha)
+                ax.plot(traj[i:i+2, pc_i], traj[i:i+2, pc_j], "-o",
+                        color=c, alpha=0.9, markersize=4, linewidth=1.5)
+            ax.scatter(traj[0, pc_i], traj[0, pc_j],
+                      c=[cmap(0.3)], s=80, marker=marker_start, zorder=5)
+            ax.scatter(traj[-1, pc_i], traj[-1, pc_j],
+                      c=[cmap(1.0)], s=80, marker=marker_end, zorder=5)
+            ax.set_xlabel(f"PC{pc_i + 1}")
+            ax.set_ylabel(f"PC{pc_j + 1}")
+            ax.grid(True, alpha=0.3)
+
         # DiRT 5×3 grid
         fig_5d, axes_5d = plt.subplots(n_win, 3, figsize=(12, 18))
         for w, win in enumerate(windows):
@@ -260,7 +274,7 @@ def run(
                 proj_d = stacked_d @ Vt[:n_comp].T
                 ax = axes_5d[w][col]
                 cmap_d = plt.cm.viridis
-                _plot_window(ax, proj_d, cmap_d, n_layers_dirt, p_i, p_j)
+                _plot_window_dirt(ax, proj_d, cmap_d, n_layers_dirt, p_i, p_j)
                 if col == 0:
                     ax.set_ylabel(f"Token: \"{win['token']}\"\nPC{p_i+1}-PC{p_j+1}", fontsize=8)
         fig_5d.suptitle(f"DiRT 5-Window Trajectory (seed {seed})\n{sent_text[:60]}", fontsize=12)
@@ -280,7 +294,7 @@ def run(
                 proj_b = stacked_b @ Vt[:n_comp].T
                 ax = axes_5b[w][col]
                 cmap_b = plt.cm.plasma
-                _plot_window(ax, proj_b, cmap_b, n_layers_base_s, p_i, p_j)
+                _plot_window_base(ax, proj_b, cmap_b, n_layers_base_s, p_i, p_j)
                 if col == 0:
                     ax.set_ylabel(f"Token: \"{win['token']}\"\nPC{p_i+1}-PC{p_j+1}", fontsize=8)
         fig_5b.suptitle(f"Base 5-Window Trajectory (seed {seed})\n{sent_text[:60]}", fontsize=12)
@@ -334,6 +348,7 @@ def run(
             c = cmap_b3(alpha)
             ax_3b.plot(*np.column_stack([proj_b0[i], proj_b0[i+1]]), "-o",
                       color=c, alpha=0.9, linewidth=2, markersize=4)
+            ax_3b.text(*proj_b0[i], str(i), fontsize=7, color=c, alpha=0.8)
         ax_3b.scatter(*proj_b0[0], c=[cmap_b3(0.3)], s=120, marker="*", zorder=5, label="start")
         ax_3b.scatter(*proj_b0[-1], c=[cmap_b3(1.0)], s=120, marker="X", zorder=5, label="end")
         ax_3b.set_xlabel("PC1"); ax_3b.set_ylabel("PC2"); ax_3b.set_zlabel("PC3")
