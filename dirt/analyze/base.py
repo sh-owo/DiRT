@@ -185,16 +185,17 @@ def create_data_sharding(mesh):
     )
 
 
-def tokenize_batch(tokenizer, samples, seq_len: int, pad_id: int):
-    input_ids_list = []
-    for sample in samples:
-        text = sample["text"]
-        ids = tokenizer.encode(text, out_type=int)
-        ids = ids[:seq_len]
-        pad_len = seq_len - len(ids)
-        ids += [int(pad_id)] * pad_len
-        input_ids_list.append(ids)
-    return np.array(input_ids_list, dtype=np.int32)
+def build_chunked_batches(
+    data_iter, tokenizer, seq_len: int, batch_size: int, n_batches: int
+) -> np.ndarray:
+    buffer = []
+    for sample in data_iter:
+        ids = tokenizer.encode(sample["text"], out_type=int)
+        buffer.extend(ids)
+        if len(buffer) >= n_batches * batch_size * seq_len:
+            break
+    buffer = np.array(buffer[:n_batches * batch_size * seq_len], dtype=np.int32)
+    return buffer.reshape(n_batches, batch_size, seq_len)
 
 
 def run_inference(model, params, input_sharded, analysis_mode: bool = False):
@@ -237,7 +238,7 @@ def collect_analysis_data(
     dirt_model: DiRTModel,
     base_model: BaseModel,
     mesh,
-    data_iter,
+    all_batches: np.ndarray,
     tokenizer,
     pad_id: int,
     seq_len: int,
@@ -283,22 +284,13 @@ def collect_analysis_data(
     data_sharding = create_data_sharding(mesh)
     shard_fn = get_data_shard_fn(mesh, data_sharding)
 
-    print(f"  Streaming {n_batches} batches ({batch_size} x {seq_len})...")
+    print(f"  Processing {n_batches} batches ({batch_size} x {seq_len})...")
     print(f"  (First batch includes JIT compilation — may take a few minutes)")
 
     for batch_id in range(n_batches):
-        samples = []
-        for _ in range(B_per_proc):
-            try:
-                samples.append(next(data_iter))
-            except StopIteration:
-                break
-        if not samples:
-            break
-
-        input_ids = tokenize_batch(tokenizer, samples, seq_len, pad_id)
-        B_local, T = input_ids.shape
-        input_sharded = shard_fn(input_ids)
+        batch_data = all_batches[batch_id]
+        local_input = batch_data[proc_idx * B_per_proc : (proc_idx + 1) * B_per_proc]
+        input_sharded = shard_fn(local_input)
 
         dirt_logits, dirt_metrics = run_inference(
             dirt_model, dirt_params, input_sharded, analysis_mode=True

@@ -18,6 +18,7 @@ from dirt.analyze.base import (
     load_and_shard_model,
     build_model_from_config,
     collect_analysis_data,
+    build_chunked_batches,
     save_csv,
 )
 
@@ -108,13 +109,20 @@ def main():
         ds_iter = iter(ds)
         rng = np.random.default_rng(42 + seed_idx)
 
+        all_batches = build_chunked_batches(
+            ds_iter, tokenizer,
+            seq_len=config.seq_len,
+            batch_size=config.batch_size,
+            n_batches=config.n_batches,
+        )
+
         data = collect_analysis_data(
             dirt_params=dirt_params,
             base_params=base_params,
             dirt_model=dirt_model_instance,
             base_model=base_model_instance,
             mesh=mesh,
-            data_iter=ds_iter,
+            all_batches=all_batches,
             tokenizer=tokenizer,
             pad_id=pad_id,
             seq_len=config.seq_len,

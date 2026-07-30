@@ -207,6 +207,8 @@ def run(
             e = min((w + 1) * win_size, T_full)
             mid = (s + e) // 2
             mid_token = tokenizer.decode([int(sent_token_ids[mid])]) if tokenizer else str(int(sent_token_ids[mid]))
+            if not mid_token:
+                mid_token = f"[id={int(sent_token_ids[mid])}]"
             windows.append({
                 "start": s, "end": e,
                 "token": mid_token,
