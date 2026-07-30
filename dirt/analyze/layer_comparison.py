@@ -45,13 +45,13 @@ def run(
         w = 0.35
         bars1 = ax2.bar(x - w / 2, dirt_vals, w, label="DiRT 6L", color="#2196F3", alpha=0.8)
         bars2 = ax2.bar(x + w / 2, base_vals, w, label="GPT 12L", color="#FF5722", alpha=0.8)
-        for bar, val in zip(bars1, dirt_vals):
+        for i, (bar, val) in enumerate(zip(bars1, dirt_vals)):
             ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                    f"{val:.4f}" if "NLL" in bar else f"{val:.1f}M",
+                    f"{val:.4f}" if "NLL" in metrics_labels[i] else f"{val:.1f}M",
                     ha="center", va="bottom", fontsize=10)
-        for bar, val in zip(bars2, base_vals):
+        for i, (bar, val) in enumerate(zip(bars2, base_vals)):
             ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                    f"{val:.4f}" if "NLL" in bar else f"{val:.1f}M",
+                    f"{val:.4f}" if "NLL" in metrics_labels[i] else f"{val:.1f}M",
                     ha="center", va="bottom", fontsize=10)
         ax2.set_xticks(x)
         ax2.set_xticklabels(metrics_labels)

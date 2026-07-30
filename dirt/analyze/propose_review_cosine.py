@@ -122,13 +122,13 @@ def run(
     print(f"\n=== propose_review_cosine (seed {seed}) ===")
     for L in range(n_layers):
         label = "REINFORCE" if mean_cos[L] > 0 else "CORRECT"
-        print(f"  L{label}: mean_cos={mean_cos[L]:+.4f}  std={std_cos[L]:.4f}  "
+        print(f"  L{L}: mean_cos={mean_cos[L]:+.4f}  std={std_cos[L]:.4f}  "
               f"neg={neg_frac[L]:.2%}  pos={pos_frac[L]:.2%}  → {label}")
     if base_mean_cos is not None:
         for L in range(1, n_layers_base):
             idx = L - 1
             label = "STRAIGHT" if base_mean_cos[idx] > 0 else "TURN"
-            print(f"  Base L{label}: mean_cos={base_mean_cos[idx]:+.4f}  "
-                  f"neg={base_neg_frac[idx]:.2%}  pos={base_pos_frac[idx]:.2%}")
+            print(f"  Base L{L}: mean_cos={base_mean_cos[idx]:+.4f}  "
+                  f"neg={base_neg_frac[idx]:.2%}  pos={base_pos_frac[idx]:.2%}  → {label}")
 
     return results
