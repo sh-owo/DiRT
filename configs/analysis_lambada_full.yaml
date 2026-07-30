@@ -1,0 +1,34 @@
+model_size: 200m
+n_batches: 3
+batch_size: 64
+seq_len: 2048
+subsample_size: 5000
+
+dirt_config: configs/model/dirt_200m.yaml
+base_config: configs/model/base_200m.yaml
+tokenizer_path: data/tokenizer
+
+cache_dir: checkpoints/analysis_200m
+
+dataset:
+  hf_name: cimec/lambada
+  hf_config: default
+  split: test
+  text_key: text
+  eos_id: 1
+
+seeds: [1337, 42, 67, 3, 451]
+
+checkpoints:
+  dirt:
+    1337: gs://BUCKET/dirt_200m/seed1337/model.safetensors
+    42: gs://BUCKET/dirt_200m/seed42/model.safetensors
+    67: gs://BUCKET/dirt_200m/seed67/model.safetensors
+    3: gs://BUCKET/dirt_200m/seed3/model.safetensors
+    451: gs://BUCKET/dirt_200m/seed451/model.safetensors
+  base:
+    1337: gs://BUCKET/base_200m/seed1337/model.safetensors
+    42: gs://BUCKET/base_200m/seed42/model.safetensors
+    67: gs://BUCKET/base_200m/seed67/model.safetensors
+    3: gs://BUCKET/base_200m/seed3/model.safetensors
+    451: gs://BUCKET/base_200m/seed451/model.safetensors
