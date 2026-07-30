@@ -26,6 +26,8 @@ def run(
     sent_full_hidden_base: list[np.ndarray] | None = None,
     sent_token_ids: np.ndarray | None = None,
     sent_text: str | None = None,
+    sent_dv_raw: list[np.ndarray] | None = None,
+    sent_rv_raw: list[np.ndarray] | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -195,122 +197,127 @@ def run(
         fig3d.savefig(output_dir / f"trajectory_pca_3d_elev20_azim{angle}.png", dpi=150, bbox_inches="tight")
     plt.close(fig3d)
 
-    # --- 3×3 sentence PCA grid ---
-    # --- 5-forward sentence windows (2D + 3D) ---
-    if sent_full_hidden_dirt is not None and sent_full_hidden_base is not None:
+    # --- Single-token sentence trajectory (2D grid + 3D) ---
+    if (sent_full_hidden_dirt is not None and sent_full_hidden_base is not None
+            and sent_dv_raw is not None and sent_rv_raw is not None):
         T_full = sent_token_ids.shape[0]
-        n_win = 5
-        win_size = (T_full + n_win - 1) // n_win
-        windows = []
-        for w in range(n_win):
-            s = w * win_size
-            e = min((w + 1) * win_size, T_full)
-            mid = (s + e) // 2
-            mid_token = tokenizer.decode([int(sent_token_ids[mid])]) if tokenizer else str(int(sent_token_ids[mid]))
-            if not mid_token:
-                mid_token = f"[id={int(sent_token_ids[mid])}]"
-            windows.append({
-                "start": s, "end": e,
-                "token": mid_token,
-                "dirt_hidden": [h[s:e].mean(axis=0, keepdims=True) for h in sent_full_hidden_dirt],
-                "base_hidden": [h[s:e].mean(axis=0, keepdims=True) for h in sent_full_hidden_base],
-            })
 
-        n_layers_s = n_layers_dirt
+        # Find anchor: first period in decoded text + offset
+        text_preview = tokenizer.decode(sent_token_ids.tolist()) if tokenizer else ""
+        first_period = text_preview.find(". ")
+        if first_period == -1:
+            first_period = text_preview.find(".")
+        if first_period > 0:
+            char_count = 0
+            anchor = min(50, T_full // 2)
+            for i in range(min(T_full, 500)):
+                tok_str = tokenizer.decode([int(sent_token_ids[i])]) if tokenizer else str(int(sent_token_ids[i]))
+                char_count += len(tok_str)
+                if char_count > first_period + 2:
+                    anchor = min(i + 3, T_full - 10)
+                    break
+        else:
+            anchor = min(100, T_full // 2)
+
+        n_win = 5
+        token_positions = [anchor + i for i in range(-2, 3)]
+        token_positions = [max(0, min(p, T_full - 1)) for p in token_positions]
+
+        def _build_dirt_traj(hidden, dv, n_l, pos):
+            pts = [hidden[0][pos]]
+            for L in range(n_l):
+                pts.append(pts[-1] + dv[L][pos])
+                pts.append(hidden[L + 1][pos])
+            return np.stack(pts, axis=0)
+
+        def _build_base_traj(hidden, n_l, pos):
+            return np.stack([hidden[L][pos] for L in range(n_l + 1)], axis=0)
+
+        def _token_str(ids, pos, tok):
+            tid = int(ids[pos])
+            s = tok.decode([tid]) if tok else str(tid)
+            return s if s else f"[id={tid}]"
+
         pc_pairs_s = [(0, 1), (2, 3), (4, 5)]
         pc_targets_s = [2, 4, 6]
 
-        def _build_sent_traj(wh, dv, n_l):
-            pts = [wh[0]]
-            for L in range(n_l):
-                pts.append(pts[-1] + dv[L])
-                pts.append(wh[L + 1])
-            return np.concatenate(pts, axis=0)
-
-        def _plot_window_dirt(ax, traj, cmap, n_l, pc_i, pc_j, marker_start="*", marker_end="X"):
-            pt = 0
-            for L in range(n_l):
-                alpha = 0.3 + 0.7 * L / max(n_l - 1, 1)
-                c = cmap(alpha)
-                z_L = traj[pt]
-                new_L = traj[pt + 1]
-                z_n = traj[pt + 2]
-                ax.plot([z_L[pc_i], new_L[pc_i]], [z_L[pc_j], new_L[pc_j]],
-                        "--", color=c, alpha=0.9, linewidth=1.5)
-                ax.plot([new_L[pc_i], z_n[pc_i]], [new_L[pc_j], z_n[pc_j]],
-                        "-", color=c, alpha=0.9, linewidth=2)
-                ax.annotate(str(L), (z_L[pc_i], z_L[pc_j]),
-                           fontsize=7, color=c, fontweight="bold")
-                pt += 2
-            ax.scatter(traj[0, pc_i], traj[0, pc_j],
-                      c=[cmap(0.3)], s=80, marker=marker_start, zorder=5)
-            ax.scatter(traj[-1, pc_i], traj[-1, pc_j],
-                      c=[cmap(1.0)], s=80, marker=marker_end, zorder=5)
-            ax.set_xlabel(f"PC{pc_i + 1}")
-            ax.set_ylabel(f"PC{pc_j + 1}")
-            ax.grid(True, alpha=0.3)
-
-        def _plot_window_base(ax, traj, cmap, n_l, pc_i, pc_j, marker_start="*", marker_end="X"):
-            for i in range(n_l):
-                alpha = 0.3 + 0.7 * i / max(n_l - 1, 1)
-                c = cmap(alpha)
-                ax.plot(traj[i:i+2, pc_i], traj[i:i+2, pc_j], "-o",
-                        color=c, alpha=0.9, markersize=4, linewidth=1.5)
-            ax.scatter(traj[0, pc_i], traj[0, pc_j],
-                      c=[cmap(0.3)], s=80, marker=marker_start, zorder=5)
-            ax.scatter(traj[-1, pc_i], traj[-1, pc_j],
-                      c=[cmap(1.0)], s=80, marker=marker_end, zorder=5)
-            ax.set_xlabel(f"PC{pc_i + 1}")
-            ax.set_ylabel(f"PC{pc_j + 1}")
-            ax.grid(True, alpha=0.3)
-
-        # DiRT 5×3 grid
-        fig_5d, axes_5d = plt.subplots(n_win, 3, figsize=(12, 18))
-        for w, win in enumerate(windows):
-            dv_w = [dv[0:1] for dv in delta_v]  # 1 sample per window
-            traj_d = _build_sent_traj(win["dirt_hidden"], dv_w, n_layers_dirt)
+        # DiRT 5x3 grid
+        fig_5d, axes_5d = plt.subplots(5, 3, figsize=(12, 18))
+        for row, pos in enumerate(token_positions):
+            traj_d = _build_dirt_traj(sent_full_hidden_dirt, sent_dv_raw, n_layers_dirt, pos)
+            tk = _token_str(sent_token_ids, pos, tokenizer)
             for col, (p_i, p_j) in enumerate(pc_pairs_s):
                 n_comp = pc_targets_s[col]
-                stacked_d = traj_d - traj_d.mean(axis=0, keepdims=True)
-                U, S, Vt = np.linalg.svd(stacked_d, full_matrices=False)
-                proj_d = stacked_d @ Vt[:n_comp].T
-                ax = axes_5d[w][col]
+                centered = traj_d - traj_d.mean(axis=0, keepdims=True)
+                U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+                proj = centered @ Vt[:n_comp].T
+                ax = axes_5d[row][col]
                 cmap_d = plt.cm.viridis
-                _plot_window_dirt(ax, proj_d, cmap_d, n_layers_dirt, p_i, p_j)
-                if col == 0:
-                    ax.set_ylabel(f"Token: \"{win['token']}\"\nPC{p_i+1}-PC{p_j+1}", fontsize=8)
-        fig_5d.suptitle(f"DiRT 5-Window Trajectory (seed {seed})\n{sent_text[:60]}", fontsize=12)
+                pt = 0
+                for L in range(n_layers_dirt):
+                    alpha = 0.3 + 0.7 * L / max(n_layers_dirt - 1, 1)
+                    c = cmap_d(alpha)
+                    z_L = proj[pt]
+                    new_L = proj[pt + 1]
+                    z_n = proj[pt + 2]
+                    ax.plot([z_L[p_i], new_L[p_i]], [z_L[p_j], new_L[p_j]],
+                            "--", color=c, alpha=0.9, linewidth=1.5)
+                    ax.plot([new_L[p_i], z_n[p_i]], [new_L[p_j], z_n[p_j]],
+                            "-", color=c, alpha=0.9, linewidth=2)
+                    ax.annotate(str(L), (z_L[p_i], z_L[p_j]),
+                               fontsize=7, color=c, fontweight="bold")
+                    pt += 2
+                ax.scatter(proj[0, p_i], proj[0, p_j],
+                          c=[cmap_d(0.3)], s=80, marker="*", zorder=5)
+                ax.scatter(proj[-1, p_i], proj[-1, p_j],
+                          c=[cmap_d(1.0)], s=80, marker="X", zorder=5)
+                ax.set_xlabel(f"PC{p_i + 1}")
+                ax.set_ylabel(f"PC{p_j + 1}")
+                ax.grid(True, alpha=0.3)
+            axes_5d[row][0].set_ylabel(f"Token: \"{tk}\"", fontsize=8)
+        fig_5d.suptitle(f"DiRT Single-Token Trajectories (seed {seed})", fontsize=12)
         fig_5d.tight_layout()
         fig_5d.savefig(output_dir / "trajectory_pca_2d_grid_dirt.png", dpi=150)
         plt.close(fig_5d)
 
-        # Base 5×3 grid
-        fig_5b, axes_5b = plt.subplots(n_win, 3, figsize=(12, 18))
-        for w, win in enumerate(windows):
-            n_layers_base_s = len(win["base_hidden"]) - 1
-            traj_b = np.concatenate(win["base_hidden"], axis=0)
+        # Base 5x3 grid
+        fig_5b, axes_5b = plt.subplots(5, 3, figsize=(12, 18))
+        for row, pos in enumerate(token_positions):
+            traj_b = _build_base_traj(sent_full_hidden_base, n_layers_base, pos)
+            tk = _token_str(sent_token_ids, pos, tokenizer)
+            n_l_base = traj_b.shape[0] - 1
             for col, (p_i, p_j) in enumerate(pc_pairs_s):
                 n_comp = pc_targets_s[col]
-                stacked_b = traj_b - traj_b.mean(axis=0, keepdims=True)
-                U, S, Vt = np.linalg.svd(stacked_b, full_matrices=False)
-                proj_b = stacked_b @ Vt[:n_comp].T
-                ax = axes_5b[w][col]
-                cmap_b = plt.cm.plasma
-                _plot_window_base(ax, proj_b, cmap_b, n_layers_base_s, p_i, p_j)
-                if col == 0:
-                    ax.set_ylabel(f"Token: \"{win['token']}\"\nPC{p_i+1}-PC{p_j+1}", fontsize=8)
-        fig_5b.suptitle(f"Base 5-Window Trajectory (seed {seed})\n{sent_text[:60]}", fontsize=12)
+                centered = traj_b - traj_b.mean(axis=0, keepdims=True)
+                U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+                proj = centered @ Vt[:n_comp].T
+                ax = axes_5b[row][col]
+                cmap_b = plt.cm.viridis
+                for i in range(n_l_base):
+                    alpha = 0.3 + 0.7 * i / max(n_l_base - 1, 1)
+                    c = cmap_b(alpha)
+                    ax.plot(proj[i:i+2, p_i], proj[i:i+2, p_j], "-o",
+                            color=c, alpha=0.9, markersize=4, linewidth=1.5)
+                ax.scatter(proj[0, p_i], proj[0, p_j],
+                          c=[cmap_b(0.3)], s=80, marker="*", zorder=5)
+                ax.scatter(proj[-1, p_i], proj[-1, p_j],
+                          c=[cmap_b(1.0)], s=80, marker="X", zorder=5)
+                ax.set_xlabel(f"PC{p_i + 1}")
+                ax.set_ylabel(f"PC{p_j + 1}")
+                ax.grid(True, alpha=0.3)
+            axes_5b[row][0].set_ylabel(f"Token: \"{tk}\"", fontsize=8)
+        fig_5b.suptitle(f"Base Single-Token Trajectories (seed {seed})", fontsize=12)
         fig_5b.tight_layout()
         fig_5b.savefig(output_dir / "trajectory_pca_2d_grid_base.png", dpi=150)
         plt.close(fig_5b)
 
-        # DiRT 3D (first window)
-        w0 = windows[0]
-        dv_0 = [dv[0:1] for dv in delta_v]
-        traj_d0 = _build_sent_traj(w0["dirt_hidden"], dv_0, n_layers_dirt)
-        stacked_d0 = traj_d0 - traj_d0.mean(axis=0, keepdims=True)
-        U, S, Vt = np.linalg.svd(stacked_d0, full_matrices=False)
-        proj_d0 = stacked_d0 @ Vt[:3].T
+        # DiRT 3D (anchor token)
+        pos_3d = token_positions[2]
+        traj_d3 = _build_dirt_traj(sent_full_hidden_dirt, sent_dv_raw, n_layers_dirt, pos_3d)
+        tk_3d = _token_str(sent_token_ids, pos_3d, tokenizer)
+        centered_d3 = traj_d3 - traj_d3.mean(axis=0, keepdims=True)
+        U, S, Vt = np.linalg.svd(centered_d3, full_matrices=False)
+        proj_d3 = centered_d3 @ Vt[:3].T
 
         fig_3d = plt.figure(figsize=(10, 8))
         ax_3d = fig_3d.add_subplot(111, projection="3d")
@@ -319,42 +326,42 @@ def run(
         for L in range(n_layers_dirt):
             alpha = 0.3 + 0.7 * L / max(n_layers_dirt - 1, 1)
             c = cmap_d3(alpha)
-            z_L = proj_d0[pt]
-            new_L = proj_d0[pt + 1]
-            z_n = proj_d0[pt + 2]
+            z_L = proj_d3[pt]
+            new_L = proj_d3[pt + 1]
+            z_n = proj_d3[pt + 2]
             ax_3d.plot(*np.column_stack([z_L, new_L]), "--", color=c, alpha=0.9, linewidth=2)
             ax_3d.plot(*np.column_stack([new_L, z_n]), "-", color=c, alpha=0.9, linewidth=3)
             ax_3d.text(*z_L, str(L), fontsize=8, color=c, fontweight="bold")
             pt += 2
-        ax_3d.scatter(*proj_d0[0], c=[cmap_d3(0.3)], s=120, marker="*", zorder=5, label="start")
-        ax_3d.scatter(*proj_d0[-1], c=[cmap_d3(1.0)], s=120, marker="X", zorder=5, label="end")
+        ax_3d.scatter(*proj_d3[0], c=[cmap_d3(0.3)], s=120, marker="*", zorder=5, label="start")
+        ax_3d.scatter(*proj_d3[-1], c=[cmap_d3(1.0)], s=120, marker="X", zorder=5, label="end")
         ax_3d.set_xlabel("PC1"); ax_3d.set_ylabel("PC2"); ax_3d.set_zlabel("PC3")
-        ax_3d.set_title(f"DiRT Sentence 3D Trajectory\nToken: \"{w0['token']}\" (seed {seed})")
+        ax_3d.set_title(f"DiRT Token: \"{tk_3d}\"\nPC1-PC2-PC3 (seed {seed})")
         ax_3d.legend(); ax_3d.grid(True, alpha=0.3)
         fig_3d.tight_layout()
         fig_3d.savefig(output_dir / "trajectory_pca_3d_dirt.png", dpi=150)
         plt.close(fig_3d)
 
-        # Base 3D (first window)
-        traj_b0 = np.concatenate(w0["base_hidden"], axis=0)
-        stacked_b0 = traj_b0 - traj_b0.mean(axis=0, keepdims=True)
-        U, S, Vt = np.linalg.svd(stacked_b0, full_matrices=False)
-        proj_b0 = stacked_b0 @ Vt[:3].T
-        n_layers_base_s = len(w0["base_hidden"]) - 1
+        # Base 3D (same token)
+        traj_b3 = _build_base_traj(sent_full_hidden_base, n_layers_base, pos_3d)
+        centered_b3 = traj_b3 - traj_b3.mean(axis=0, keepdims=True)
+        U, S, Vt = np.linalg.svd(centered_b3, full_matrices=False)
+        proj_b3 = centered_b3 @ Vt[:3].T
+        n_l_base = traj_b3.shape[0] - 1
 
         fig_3b = plt.figure(figsize=(10, 8))
         ax_3b = fig_3b.add_subplot(111, projection="3d")
-        cmap_b3 = plt.cm.plasma
-        for i in range(n_layers_base_s):
-            alpha = 0.3 + 0.7 * i / max(n_layers_base_s - 1, 1)
+        cmap_b3 = plt.cm.viridis
+        for i in range(n_l_base):
+            alpha = 0.3 + 0.7 * i / max(n_l_base - 1, 1)
             c = cmap_b3(alpha)
-            ax_3b.plot(*np.column_stack([proj_b0[i], proj_b0[i+1]]), "-o",
+            ax_3b.plot(*np.column_stack([proj_b3[i], proj_b3[i+1]]), "-o",
                       color=c, alpha=0.9, linewidth=2, markersize=4)
-            ax_3b.text(*proj_b0[i], str(i), fontsize=7, color=c, alpha=0.8)
-        ax_3b.scatter(*proj_b0[0], c=[cmap_b3(0.3)], s=120, marker="*", zorder=5, label="start")
-        ax_3b.scatter(*proj_b0[-1], c=[cmap_b3(1.0)], s=120, marker="X", zorder=5, label="end")
+            ax_3b.text(*proj_b3[i], str(i), fontsize=7, color=c, alpha=0.8)
+        ax_3b.scatter(*proj_b3[0], c=[cmap_b3(0.3)], s=120, marker="*", zorder=5, label="start")
+        ax_3b.scatter(*proj_b3[-1], c=[cmap_b3(1.0)], s=120, marker="X", zorder=5, label="end")
         ax_3b.set_xlabel("PC1"); ax_3b.set_ylabel("PC2"); ax_3b.set_zlabel("PC3")
-        ax_3b.set_title(f"Base Sentence 3D Trajectory\nToken: \"{w0['token']}\" (seed {seed})")
+        ax_3b.set_title(f"Base Token: \"{tk_3d}\"\nPC1-PC2-PC3 (seed {seed})")
         ax_3b.legend(); ax_3b.grid(True, alpha=0.3)
         fig_3b.tight_layout()
         fig_3b.savefig(output_dir / "trajectory_pca_3d_base.png", dpi=150)

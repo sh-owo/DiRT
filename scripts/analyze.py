@@ -198,7 +198,9 @@ def main():
                               sent_full_hidden_dirt=data.sent_full_hidden_dirt,
                               sent_full_hidden_base=data.sent_full_hidden_base,
                               sent_token_ids=data.sent_token_ids,
-                              sent_text=data.sent_text)
+                              sent_text=data.sent_text,
+                              sent_dv_raw=data.sent_dv_raw,
+                              sent_rv_raw=data.sent_rv_raw)
 
             result = mod.run(**kwargs)
 

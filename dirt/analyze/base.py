@@ -171,6 +171,8 @@ class AnalysisData:
     sent_full_hidden_base: list[np.ndarray] | None = None
     sent_token_ids: np.ndarray | None = None
     sent_text: str | None = None
+    sent_dv_raw: list[np.ndarray] | None = None
+    sent_rv_raw: list[np.ndarray] | None = None
 
     n_tokens: int = 0
     n_subsample: int = 0
@@ -385,6 +387,15 @@ def collect_analysis_data(
                     sent_token_ids_arr[sent_token_ids_arr != int(pad_id)].tolist()
                 )
 
+                sent_dv_raw_arr = [
+                    gather_across_devices(dirt_metrics[L]["delta_v_raw"])[0]
+                    for L in range(n_layers_dirt)
+                ]
+                sent_rv_raw_arr = [
+                    gather_across_devices(dirt_metrics[L]["review_raw"])[0]
+                    for L in range(n_layers_dirt)
+                ]
+
             total_subsample += len(batch_indices)
             total += n_new
             mean_dirt = float(np.mean(dirt_nll_full.ravel()[valid_flat]))
@@ -436,6 +447,8 @@ def collect_analysis_data(
             sent_full_hidden_base=sent_full_hidden_base_arr if total > 0 else None,
             sent_token_ids=sent_token_ids_arr if total > 0 else None,
             sent_text=sent_text_str if total > 0 else None,
+            sent_dv_raw=sent_dv_raw_arr if total > 0 else None,
+            sent_rv_raw=sent_rv_raw_arr if total > 0 else None,
             n_tokens=total,
             n_subsample=total_subsample,
             n_layers_dirt=n_layers_dirt,
