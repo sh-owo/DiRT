@@ -310,12 +310,17 @@ def collect_analysis_data(
         dirt_nll = compute_per_token_loss(dirt_logits[:, :-1, :], input_sharded[:, 1:])
         base_nll = compute_per_token_loss(base_logits[:, :-1, :], input_sharded[:, 1:])
 
+        loss_mask = (input_sharded[:, 1:] != pad_id).astype(jnp.float32)
+
         input_full = gather_across_devices(input_sharded)
         dirt_nll_full = gather_across_devices(dirt_nll)
         base_nll_full = gather_across_devices(base_nll)
+        loss_mask_full = gather_across_devices(loss_mask)
 
         B_full, T = input_full.shape
-        n_new = B_full * (T - 1)
+        n_new_total = B_full * (T - 1)
+        valid_flat = loss_mask_full.ravel().astype(bool)
+        n_new = int(valid_flat.sum())
 
         mag_full_list = []
         for L in range(n_layers_dirt):
@@ -327,35 +332,41 @@ def collect_analysis_data(
         rv_gathered = []
         dr_gathered = []
         for L in range(n_layers_dirt):
-            dv_gathered.append(gather_across_devices(dirt_metrics[L]["delta_v_raw"]).reshape(-1, d_model))
-            rv_gathered.append(gather_across_devices(dirt_metrics[L]["review_raw"]).reshape(-1, d_model))
-            dr_gathered.append(gather_across_devices(dirt_metrics[L]["direction_raw"]).reshape(-1, d_model))
+            dv_gathered.append(gather_across_devices(dirt_metrics[L]["delta_v_raw"])[:, :-1, :].reshape(-1, d_model))
+            rv_gathered.append(gather_across_devices(dirt_metrics[L]["review_raw"])[:, :-1, :].reshape(-1, d_model))
+            dr_gathered.append(gather_across_devices(dirt_metrics[L]["direction_raw"])[:, :-1, :].reshape(-1, d_model))
 
-        hd_gathered = []
+        hd_gathered_raw = []
         for L in range(n_layers_dirt):
-            hd_gathered.append(gather_across_devices(dirt_metrics[L]["z_L_hidden"]).reshape(-1, d_model))
-        hd_gathered.append(gather_across_devices(dirt_metrics[n_layers_dirt - 1]["x_before_norm_hidden"]).reshape(-1, d_model))
+            hd_gathered_raw.append(gather_across_devices(dirt_metrics[L]["z_L_hidden"]))
+        hd_gathered_raw.append(gather_across_devices(dirt_metrics[n_layers_dirt - 1]["x_before_norm_hidden"]))
+        hd_gathered = [h[:, :-1, :].reshape(-1, d_model) for h in hd_gathered_raw]
 
-        hb_gathered = []
+        hb_gathered_raw = []
         for L in range(n_layers_base):
-            hb_gathered.append(gather_across_devices(base_metrics[L]["z_L"]).reshape(-1, d_model))
-        hb_gathered.append(gather_across_devices(base_metrics[n_layers_base - 1]["x"]).reshape(-1, d_model))
+            hb_gathered_raw.append(gather_across_devices(base_metrics[L]["z_L"]))
+        hb_gathered_raw.append(gather_across_devices(base_metrics[n_layers_base - 1]["x"]))
+        hb_gathered = [h[:, :-1, :].reshape(-1, d_model) for h in hb_gathered_raw]
 
         if is_main:
             raw_token_ids[batch_id] = input_full
-            dirt_loss_all[total:total + n_new] = dirt_nll_full.ravel()
-            base_loss_all[total:total + n_new] = base_nll_full.ravel()
-            pos_ids_all[total:total + n_new] = np.column_stack([
-                np.full(n_new, batch_id, dtype=np.int32),
+            dirt_loss_all[total:total + n_new] = dirt_nll_full.ravel()[valid_flat]
+            base_loss_all[total:total + n_new] = base_nll_full.ravel()[valid_flat]
+            pos_flat_full = np.column_stack([
+                np.full(n_new_total, batch_id, dtype=np.int32),
                 np.repeat(np.arange(B_full, dtype=np.int32), T - 1),
                 np.tile(np.arange(1, T, dtype=np.int32), B_full),
             ])
+            pos_ids_all[total:total + n_new] = pos_flat_full[valid_flat]
 
             for L in range(n_layers_dirt):
-                mag_all[L][total:total + n_new] = np.abs(mag_full_list[L].ravel())
+                mag_all[L][total:total + n_new] = np.abs(mag_full_list[L].ravel())[valid_flat]
 
             rng_batch = np.random.default_rng(42 + batch_id)
-            batch_indices = rng_batch.choice(n_new, min(subsample_per_batch, n_new), replace=False)
+            valid_indices = np.where(valid_flat)[0]
+            k = min(subsample_per_batch, n_new)
+            sel = rng_batch.choice(n_new, size=k, replace=False)
+            batch_indices = valid_indices[sel]
             for L in range(n_layers_dirt):
                 delta_v_list[L].append(dv_gathered[L][batch_indices])
                 review_list[L].append(rv_gathered[L][batch_indices])
@@ -367,23 +378,16 @@ def collect_analysis_data(
                 hidden_base_list[L].append(hb_gathered[L][batch_indices])
 
             if batch_id == 0:
-                sentence_hidden_dirt_arr = [hd_gathered[L][:3] for L in range(n_layers_dirt + 1)]
-                sentence_hidden_base_arr = [hb_gathered[L][:3] for L in range(n_layers_base + 1)]
+                sentence_hidden_dirt_arr = [h[0, :3] for h in hd_gathered_raw]
+                sentence_hidden_base_arr = [h[0, :3] for h in hb_gathered_raw]
                 sentence_texts_arr = []
                 for idx in range(3):
                     ids = input_full[idx]
                     text = tokenizer.decode(ids[ids != int(pad_id)].tolist())
                     sentence_texts_arr.append(text)
 
-                T_full = input_full.shape[1]
-                sent_full_hidden_dirt_arr = [
-                    hd_gathered[L].reshape(B_full, T_full, d_model)[0]
-                    for L in range(n_layers_dirt + 1)
-                ]
-                sent_full_hidden_base_arr = [
-                    hb_gathered[L].reshape(B_full, T_full, d_model)[0]
-                    for L in range(n_layers_base + 1)
-                ]
+                sent_full_hidden_dirt_arr = [h[0] for h in hd_gathered_raw]
+                sent_full_hidden_base_arr = [h[0] for h in hb_gathered_raw]
                 sent_token_ids_arr = input_full[0]
                 sent_text_str = tokenizer.decode(
                     sent_token_ids_arr[sent_token_ids_arr != int(pad_id)].tolist()
@@ -391,7 +395,8 @@ def collect_analysis_data(
 
             total_subsample += len(batch_indices)
             total += n_new
-            print(f"  batch {batch_id + 1}/{n_batches} — {total:,} pos, {total_subsample:,} subsampled")
+            mean_dirt = float(np.mean(dirt_nll_full.ravel()[valid_flat]))
+            print(f"  batch {batch_id + 1}/{n_batches} — {total:,} pos, {total_subsample:,} subsampled  (masked mean={mean_dirt:.4f})")
 
     if not is_main:
         return None
