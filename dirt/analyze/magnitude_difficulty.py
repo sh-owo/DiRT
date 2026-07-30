@@ -6,10 +6,13 @@ import numpy as np
 from scipy.stats import spearmanr
 
 
-def _decode(tokenizer, ids, skip_special=True):
+def _decode(tokenizer, ids):
     if tokenizer is None:
         return f"[id={ids[0]}]"
-    return tokenizer.decode(ids, skip_special_tokens=skip_special)
+    try:
+        return tokenizer.decode(ids, skip_special_tokens=True)
+    except TypeError:
+        return tokenizer.decode(ids)
 
 
 def run(
