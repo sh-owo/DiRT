@@ -46,6 +46,7 @@ def run(
     decile_std_delta = []
     decile_min_delta = []
     decile_max_delta = []
+    decile_median_delta = []
     for i in range(10):
         lo, hi = decile_edges[i], decile_edges[i + 1]
         if i == 9:
@@ -60,12 +61,14 @@ def run(
             decile_std_delta.append(float(np.std(delta)))
             decile_min_delta.append(float(np.min(delta)))
             decile_max_delta.append(float(np.max(delta)))
+            decile_median_delta.append(float(np.median(delta)))
         else:
             decile_mean_loss.append(0.0)
             decile_mean_delta.append(0.0)
             decile_std_delta.append(0.0)
             decile_min_delta.append(0.0)
             decile_max_delta.append(0.0)
+            decile_median_delta.append(0.0)
 
     try:
         import matplotlib
@@ -111,6 +114,7 @@ def run(
         results[f"decile_{i}_delta_std"] = decile_std_delta[i]
         results[f"decile_{i}_delta_min"] = decile_min_delta[i]
         results[f"decile_{i}_delta_max"] = decile_max_delta[i]
+        results[f"decile_{i}_delta_median"] = decile_median_delta[i]
         results[f"decile_{i}_base_mean"] = decile_mean_loss[i]
 
     print(f"\n=== position_ppl (seed {seed}) ===")

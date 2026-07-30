@@ -100,15 +100,19 @@ def run(
     rv_norms_min = [float(np.min(np.linalg.norm(review[L], axis=-1))) for L in range(n_layers_dirt)]
     dv_norms_max = [float(np.max(np.linalg.norm(delta_v[L], axis=-1))) for L in range(n_layers_dirt)]
     rv_norms_max = [float(np.max(np.linalg.norm(review[L], axis=-1))) for L in range(n_layers_dirt)]
+    dv_norms_median = [float(np.median(np.linalg.norm(delta_v[L], axis=-1))) for L in range(n_layers_dirt)]
+    rv_norms_median = [float(np.median(np.linalg.norm(review[L], axis=-1))) for L in range(n_layers_dirt)]
     for L in range(n_layers_dirt):
         results[f"propose_norm_L{L}"] = dv_norms[L]
         results[f"propose_std_L{L}"] = dv_norms_std[L]
         results[f"propose_min_L{L}"] = dv_norms_min[L]
         results[f"propose_max_L{L}"] = dv_norms_max[L]
+        results[f"propose_median_L{L}"] = dv_norms_median[L]
         results[f"review_norm_L{L}"] = rv_norms[L]
         results[f"review_std_L{L}"] = rv_norms_std[L]
         results[f"review_min_L{L}"] = rv_norms_min[L]
         results[f"review_max_L{L}"] = rv_norms_max[L]
+        results[f"review_median_L{L}"] = rv_norms_median[L]
 
     title = f"Hidden State Trajectory (PCA, seed {seed})"
 

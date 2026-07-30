@@ -12,7 +12,7 @@ cache_dir: checkpoints/analysis_200m
 
 dataset:
   hf_name: cimec/lambada
-  hf_config: default
+  hf_config: plain_text
   split: test
   text_key: text
   eos_id: 1

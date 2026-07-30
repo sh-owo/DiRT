@@ -50,6 +50,7 @@ def run(
         results[f"std_mag_layer_{L}"] = float(np.std(mag))
         results[f"min_mag_layer_{L}"] = float(np.min(mag))
         results[f"max_mag_layer_{L}"] = float(np.max(mag))
+        results[f"median_mag_layer_{L}"] = float(np.median(mag))
 
     print(f"\n=== magnitude_cv (seed {seed}) ===")
     for L in range(n_layers):

@@ -35,6 +35,7 @@ def run(
     std_cos = [float(np.std(c)) if len(c) > 0 else 0.0 for c in cos_results]
     min_cos = [float(np.min(c)) if len(c) > 0 else 0.0 for c in cos_results]
     max_cos = [float(np.max(c)) if len(c) > 0 else 0.0 for c in cos_results]
+    median_cos = [float(np.median(c)) if len(c) > 0 else 0.0 for c in cos_results]
     neg_frac = [float(np.mean(c < 0)) if len(c) > 0 else 0.0 for c in cos_results]
     pos_frac = [float(np.mean(c > 0)) if len(c) > 0 else 0.0 for c in cos_results]
 
@@ -56,6 +57,7 @@ def run(
         base_std_cos = [float(np.std(c)) if len(c) > 0 else 0.0 for c in base_cos_list]
         base_min_cos = [float(np.min(c)) if len(c) > 0 else 0.0 for c in base_cos_list]
         base_max_cos = [float(np.max(c)) if len(c) > 0 else 0.0 for c in base_cos_list]
+        base_median_cos = [float(np.median(c)) if len(c) > 0 else 0.0 for c in base_cos_list]
         base_neg_frac = [float(np.mean(c < 0)) if len(c) > 0 else 0.0 for c in base_cos_list]
         base_pos_frac = [float(np.mean(c > 0)) if len(c) > 0 else 0.0 for c in base_cos_list]
 
@@ -193,6 +195,7 @@ def run(
         results[f"cos_std_L{L}"] = std_cos[L]
         results[f"cos_min_L{L}"] = min_cos[L]
         results[f"cos_max_L{L}"] = max_cos[L]
+        results[f"cos_median_L{L}"] = median_cos[L]
         results[f"neg_frac_L{L}"] = neg_frac[L]
         results[f"pos_frac_L{L}"] = pos_frac[L]
         if len(c) > 0:
@@ -208,6 +211,7 @@ def run(
             results[f"base_cos_std_L{L}"] = base_std_cos[idx]
             results[f"base_cos_min_L{L}"] = base_min_cos[idx]
             results[f"base_cos_max_L{L}"] = base_max_cos[idx]
+            results[f"base_cos_median_L{L}"] = base_median_cos[idx]
             results[f"base_neg_frac_L{L}"] = base_neg_frac[idx]
             results[f"base_pos_frac_L{L}"] = base_pos_frac[idx]
             if len(c) > 0:

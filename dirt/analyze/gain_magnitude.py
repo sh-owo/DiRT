@@ -42,6 +42,8 @@ def run(
     max_mag_top = float(np.max(mag_top))
     min_mag_bot = float(np.min(mag_bot))
     max_mag_bot = float(np.max(mag_bot))
+    median_mag_top = float(np.median(mag_top))
+    median_mag_bot = float(np.median(mag_bot))
 
     try:
         import matplotlib
@@ -94,5 +96,7 @@ def run(
         "std_mag_bot_gain": std_mag_bot,
         "min_mag_bot_gain": min_mag_bot,
         "max_mag_bot_gain": max_mag_bot,
+        "median_mag_top_gain": median_mag_top,
+        "median_mag_bot_gain": median_mag_bot,
         "n_valid_tokens": int(len(gain)),
     }
