@@ -71,9 +71,9 @@ class ReviewBlock(nn.Module):
         direction = _review / (jnp.linalg.norm(_review, axis=-1, keepdims=True) + 1e-6)
         magnitude = self.magnitude_linear(_delta_v)
 
-        review = direction * magnitude
+        review = direction * magnitude 
 
-        out = z_L + review
+        out = new + review
 
         delta_v_l2 = jnp.linalg.norm(delta_v, axis=-1)
         magnitude_mean = jnp.mean(magnitude, axis=-1)
